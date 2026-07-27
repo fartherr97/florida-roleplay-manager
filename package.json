@@ -1,0 +1,53 @@
+{
+  "name": "florida-roleplay-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cross-guild Discord role synchronization, department roster and permission platform for a FiveM roleplay community.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "check": "npm run lint && npm run test",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:reset": "prisma migrate reset",
+    "prisma:studio": "prisma studio",
+    "db:seed": "node prisma/seed.js",
+    "dev:api": "node --watch apps/api/src/index.js",
+    "dev:bot": "node --watch apps/bot/src/index.js",
+    "dev:worker": "node --watch apps/worker/src/index.js",
+    "start:api": "node apps/api/src/index.js",
+    "start:bot": "node apps/bot/src/index.js",
+    "start:worker": "node apps/worker/src/index.js",
+    "commands:register": "node apps/bot/src/scripts/register-commands.js",
+    "commands:clear": "node apps/bot/src/scripts/clear-commands.js",
+    "env:check": "node scripts/check-env.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@vitest/coverage-v8": "^3.2.7",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "globals": "^17.8.0",
+    "prettier": "^3.9.6",
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "prisma": "^6.19.3"
+  }
+}

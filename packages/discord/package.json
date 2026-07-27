@@ -1,0 +1,16 @@
+{
+  "name": "@frm/discord",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./*": "./src/*.js"
+  },
+  "dependencies": {
+    "@frm/logging": "*",
+    "@frm/shared": "*",
+    "discord.js": "^14.27.0"
+  }
+}

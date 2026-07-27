@@ -1,0 +1,25 @@
+/**
+ * Command registry.
+ *
+ * Adding a command means adding it to this list and nothing else: registration with
+ * Discord, routing and autocomplete all read from here.
+ */
+import * as audit from './audit.js';
+import * as certification from './certification.js';
+import * as guild from './guild.js';
+import * as mapping from './mapping.js';
+import * as member from './member.js';
+import * as permissions from './permissions.js';
+import * as resync from './resync.js';
+import * as roster from './roster.js';
+import * as system from './system.js';
+
+const MODULES = [audit, certification, guild, mapping, member, permissions, resync, roster, system];
+
+/** @type {Map<string, {data: object, execute: Function}>} */
+export const commands = new Map(MODULES.map((module) => [module.data.name, module]));
+
+/** Payload for the Discord command registration API. */
+export function commandPayload() {
+  return MODULES.map((module) => module.data.toJSON());
+}

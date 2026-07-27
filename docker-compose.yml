@@ -1,0 +1,99 @@
+name: florida-roleplay-manager
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: frm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-frm_local_password}
+      POSTGRES_DB: frm
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U frm -d frm']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot migration runner. Every other service waits for it to succeed.
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://frm:${POSTGRES_PASSWORD:-frm_local_password}@postgres:5432/frm?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ['node', 'apps/api/src/index.js']
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://frm:${POSTGRES_PASSWORD:-frm_local_password}@postgres:5432/frm?schema=public
+      REDIS_URL: redis://redis:6379
+      API_HOST: 0.0.0.0
+    ports:
+      - '${API_PORT:-4000}:4000'
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ['node', 'apps/bot/src/index.js']
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://frm:${POSTGRES_PASSWORD:-frm_local_password}@postgres:5432/frm?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ['node', 'apps/worker/src/index.js']
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://frm:${POSTGRES_PASSWORD:-frm_local_password}@postgres:5432/frm?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

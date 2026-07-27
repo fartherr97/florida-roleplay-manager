@@ -1,0 +1,28 @@
+{
+  "name": "@frm/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/helmet": "^13.1.0",
+    "@fastify/rate-limit": "^11.1.0",
+    "@frm/authorization": "*",
+    "@frm/core": "*",
+    "@frm/database": "*",
+    "@frm/logging": "*",
+    "@frm/queue": "*",
+    "@frm/shared": "*",
+    "@frm/validation": "*",
+    "fastify": "^5.10.0",
+    "fastify-plugin": "^5.1.0",
+    "ioredis": "^5.11.1",
+    "zod": "^4.4.3"
+  }
+}

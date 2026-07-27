@@ -1,0 +1,17 @@
+{
+  "name": "@frm/queue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./*": "./src/*.js"
+  },
+  "dependencies": {
+    "@frm/logging": "*",
+    "@frm/shared": "*",
+    "bullmq": "^5.81.2",
+    "ioredis": "^5.11.1"
+  }
+}

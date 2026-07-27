@@ -1,0 +1,112 @@
+/**
+ * The command gate.
+ *
+ * Every interaction passes through here before a command runs:
+ *
+ *   1. it must come from inside a guild
+ *   2. that guild must be on the approved allowlist and enabled
+ *   3. the Discord account must be linked to a platform member
+ *   4. the member must be within their command rate limit
+ *
+ * Slash-command visibility is *not* a security control - Discord will happily deliver a
+ * command to the bot regardless of what the client showed - so the real authorization
+ * check still happens inside each `@frm/core` service call. This gate exists to fail
+ * fast with a useful message, not to be the last line of defence.
+ */
+import { MessageFlags } from 'discord.js';
+import { createLogger } from '@frm/logging';
+import { loadActorByDiscordId } from '@frm/authorization';
+import { discordContext, isGuildApproved } from '@frm/core';
+import { getRedis } from '@frm/queue';
+import { REDIS_PREFIX, RateLimitError, newRequestId } from '@frm/shared';
+import { errorEmbed, renderError } from './ui.js';
+
+const log = createLogger('bot.guard');
+
+/** Per-user command rate limit: 20 commands per minute. */
+const RATE_LIMIT = { max: 20, windowSeconds: 60 };
+
+/**
+ * @param {import('discord.js').Interaction} interaction
+ * @returns {Promise<{ok: false} | {ok: true, ctx: object, requestId: string}>}
+ */
+export async function guardInteraction(interaction) {
+  const requestId = newRequestId();
+
+  if (!interaction.inGuild()) {
+    await reply(
+      interaction,
+      errorEmbed(
+        'Server only',
+        'Florida Roleplay Manager commands can only be used inside an approved Discord server.',
+      ),
+    );
+    return { ok: false };
+  }
+
+  const approved = await isGuildApproved(interaction.guildId);
+  if (!approved) {
+    // Deliberately terse: an unapproved server does not get to learn about the
+    // platform's structure.
+    await reply(
+      interaction,
+      errorEmbed(
+        'Server not approved',
+        'This Discord server is not approved for the Florida Roleplay Manager platform. ' +
+          'Contact a global administrator if you believe this is a mistake.',
+      ),
+    );
+    log.warn(
+      { discordGuildId: interaction.guildId, command: interaction.commandName },
+      'command refused in unapproved guild',
+    );
+    return { ok: false };
+  }
+
+  try {
+    await enforceRateLimit(interaction.user.id);
+  } catch (error) {
+    await reply(interaction, renderError(error, requestId));
+    return { ok: false };
+  }
+
+  try {
+    const actor = await loadActorByDiscordId(interaction.user.id);
+    const ctx = discordContext(actor, { requestId, discordGuildId: interaction.guildId });
+    return { ok: true, ctx, requestId };
+  } catch (error) {
+    await reply(interaction, renderError(error, requestId));
+    return { ok: false };
+  }
+}
+
+/**
+ * Sliding-window-ish counter in Redis. If Redis is unavailable the command is allowed:
+ * losing rate limiting is a much smaller problem than the whole bot going down, and the
+ * authorization checks are unaffected.
+ */
+async function enforceRateLimit(discordUserId) {
+  try {
+    const redis = getRedis();
+    const key = `${REDIS_PREFIX.COMMAND_RATE}:${discordUserId}`;
+    const count = await redis.incr(key);
+    if (count === 1) await redis.expire(key, RATE_LIMIT.windowSeconds);
+    if (count > RATE_LIMIT.max) {
+      const ttl = await redis.ttl(key);
+      throw new RateLimitError(Math.max(ttl, 1) * 1000);
+    }
+  } catch (error) {
+    if (error?.code === 'RATE_LIMITED') throw error;
+    log.warn({ err: error?.message }, 'rate limit check unavailable; allowing command');
+  }
+}
+
+async function reply(interaction, embed) {
+  if (!interaction.isRepliable()) return;
+  const payload = { embeds: [embed], flags: MessageFlags.Ephemeral };
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply({ embeds: [embed] }).catch(() => {});
+  } else {
+    await interaction.reply(payload).catch(() => {});
+  }
+}
