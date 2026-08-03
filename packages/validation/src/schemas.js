@@ -10,7 +10,6 @@ import {
   CAPABILITY_KEYS,
   GuildType,
   MappingDirection,
-  MembershipStatus,
   PermissionScopeType,
   RolePurpose,
   SyncIssueType,
@@ -18,17 +17,14 @@ import {
 } from '@frm/shared';
 import {
   booleanFlag,
-  callsign,
   displayName,
   isoDate,
-  notes,
   optionalIsoDate,
   optionalReason,
   optionalSnowflake,
   pagination,
   paginationWithSort,
   reason,
-  slug,
   snowflake,
   uuid,
 } from './common.js';
@@ -43,7 +39,6 @@ export const registerGuildSchema = z.object({
   discordGuildId: snowflake,
   name: displayName,
   type: enumOf(GuildType),
-  departmentId: uuid.optional(),
   syncEnabled: booleanFlag.default(true),
   features: z.array(z.string().trim().min(1).max(64)).max(32).default([]),
   reason,
@@ -54,7 +49,6 @@ export const updateGuildSettingsSchema = z.object({
   name: displayName.optional(),
   enabled: booleanFlag.optional(),
   syncEnabled: booleanFlag.optional(),
-  departmentId: uuid.nullable().optional(),
   features: z.array(z.string().trim().min(1).max(64)).max(32).optional(),
   reason,
 });
@@ -129,42 +123,56 @@ export const listMappingsSchema = paginationWithSort(
 });
 
 // ---------------------------------------------------------------------------
-// Departments, ranks, managed roles
+// Managed roles
 // ---------------------------------------------------------------------------
-
-export const createDepartmentSchema = z.object({
-  key: slug,
-  name: displayName,
-  abbreviation: z.string().trim().min(1).max(12),
-  guildId: uuid.optional(),
-  loaRoleId: optionalSnowflake,
-  suspendedRoleId: optionalSnowflake,
-  removeRankRolesOnLoa: booleanFlag.default(false),
-  removeRankRolesOnSuspension: booleanFlag.default(true),
-  reason,
-});
-
-export const createRankSchema = z.object({
-  departmentId: uuid,
-  name: displayName,
-  abbreviation: z.string().trim().max(12).optional(),
-  order: z.coerce.number().int().min(0).max(1000),
-  isSupervisor: booleanFlag.default(false),
-  isCommand: booleanFlag.default(false),
-  reason,
-});
 
 export const upsertManagedRoleSchema = z.object({
   guildId: uuid,
   discordRoleId: snowflake,
   name: displayName,
-  purpose: enumOf(RolePurpose),
-  departmentId: uuid.optional(),
-  rankId: uuid.optional(),
-  certificationId: uuid.optional(),
-  subdivisionId: uuid.optional(),
+  purpose: enumOf(RolePurpose).default(RolePurpose.MAPPING),
   protectionLevel: z.enum(['NONE', 'ELEVATED', 'TWO_PERSON']).default('NONE'),
+  managedByPlatform: booleanFlag.default(true),
   reason,
+});
+
+export const removeManagedRoleSchema = z.object({
+  managedRoleId: uuid,
+  reason,
+});
+
+export const listManagedRolesSchema = pagination.extend({
+  guildId: uuid.optional(),
+  purpose: enumOf(RolePurpose).optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Manual role grants
+// ---------------------------------------------------------------------------
+
+export const issueGrantSchema = z
+  .object({
+    managedRoleId: uuid,
+    userId: uuid.optional(),
+    discordUserId: optionalSnowflake,
+    expiresAt: optionalIsoDate,
+    reason,
+  })
+  .refine((value) => Boolean(value.userId || value.discordUserId), {
+    message: 'Provide the member to grant to',
+    path: ['discordUserId'],
+  });
+
+export const revokeGrantSchema = z.object({
+  grantId: uuid,
+  reason,
+});
+
+export const listGrantsSchema = pagination.extend({
+  userId: uuid.optional(),
+  discordUserId: optionalSnowflake,
+  managedRoleId: uuid.optional(),
+  includeExpired: booleanFlag.default(false),
 });
 
 // ---------------------------------------------------------------------------
@@ -175,10 +183,9 @@ export const memberLookupSchema = z
   .object({
     discordUserId: optionalSnowflake,
     userId: uuid.optional(),
-    callsign: callsign.optional(),
   })
-  .refine((value) => value.discordUserId || value.userId || value.callsign, {
-    message: 'Provide a Discord user, a member id or a callsign',
+  .refine((value) => value.discordUserId || value.userId, {
+    message: 'Provide a Discord user or a member id',
   });
 
 export const linkMemberSchema = z.object({
@@ -193,121 +200,13 @@ export const unlinkMemberSchema = z.object({
   reason,
 });
 
-export const memberHistorySchema = pagination.extend({
-  userId: uuid.optional(),
-  discordUserId: optionalSnowflake,
-});
-
-// ---------------------------------------------------------------------------
-// Roster actions
-// ---------------------------------------------------------------------------
-
-const rosterTarget = {
-  departmentId: uuid,
-  userId: uuid.optional(),
-  discordUserId: optionalSnowflake,
-};
-
-/** Every roster action must identify the target by platform id or Discord id. */
-const withTarget = (shape) =>
-  z
-    .object({ ...rosterTarget, ...shape })
-    .refine((value) => Boolean(value.userId || value.discordUserId), {
-      message: 'Provide the member to act on',
-      path: ['discordUserId'],
-    });
-
-export const hireSchema = withTarget({
-  rankId: uuid,
-  callsign: callsign.optional(),
-  hireDate: optionalIsoDate,
-  badgeNumber: z.string().trim().max(20).optional(),
-  notes,
-  reason,
-});
-
-export const promoteSchema = withTarget({ rankId: uuid, reason, notes });
-export const demoteSchema = withTarget({ rankId: uuid, reason, notes });
-
-export const transferSchema = withTarget({
-  targetDepartmentId: uuid,
-  targetRankId: uuid,
-  keepCallsign: booleanFlag.default(false),
-  reason,
-  notes,
-});
-
-export const loaSchema = withTarget({
-  until: optionalIsoDate,
-  reason,
-  notes,
-});
-
-export const returnFromLoaSchema = withTarget({ reason, notes });
-
-export const suspendSchema = withTarget({
-  until: optionalIsoDate,
-  reason,
-  notes,
-});
-
-export const reinstateSchema = withTarget({ reason, notes });
-
-export const removeMemberSchema = withTarget({ reason, notes });
-
-export const changeCallsignSchema = withTarget({ callsign, reason });
-
-export const rosterListSchema = paginationWithSort(
-  ['rankOrder', 'callsign', 'hireDate', 'status'],
-  'rankOrder',
+export const listMembersSchema = paginationWithSort(
+  ['createdAt', 'displayName', 'permissionLevel'],
+  'createdAt',
 ).extend({
-  departmentId: uuid.optional(),
-  status: enumOf(MembershipStatus).optional(),
-  rankId: uuid.optional(),
-  subdivisionId: uuid.optional(),
   search: z.string().trim().max(100).optional(),
+  websiteAccess: booleanFlag.optional(),
 });
-
-// ---------------------------------------------------------------------------
-// Certifications and subdivisions
-// ---------------------------------------------------------------------------
-
-export const assignCertificationSchema = z
-  .object({
-    certificationId: uuid,
-    userId: uuid.optional(),
-    discordUserId: optionalSnowflake,
-    expiresAt: optionalIsoDate,
-    reason,
-  })
-  .refine((value) => Boolean(value.userId || value.discordUserId), {
-    message: 'Provide the member to act on',
-    path: ['discordUserId'],
-  });
-
-export const removeCertificationSchema = z
-  .object({
-    certificationId: uuid,
-    userId: uuid.optional(),
-    discordUserId: optionalSnowflake,
-    reason,
-  })
-  .refine((value) => Boolean(value.userId || value.discordUserId), {
-    message: 'Provide the member to act on',
-    path: ['discordUserId'],
-  });
-
-export const subdivisionMembershipSchema = z
-  .object({
-    subdivisionId: uuid,
-    userId: uuid.optional(),
-    discordUserId: optionalSnowflake,
-    reason,
-  })
-  .refine((value) => Boolean(value.userId || value.discordUserId), {
-    message: 'Provide the member to act on',
-    path: ['discordUserId'],
-  });
 
 // ---------------------------------------------------------------------------
 // Synchronization
@@ -324,13 +223,6 @@ export const resyncMemberSchema = z
     message: 'Provide the member to resynchronize',
     path: ['discordUserId'],
   });
-
-export const resyncDepartmentSchema = z.object({
-  departmentId: uuid,
-  dryRun: booleanFlag.optional(),
-  includeInactive: booleanFlag.default(false),
-  reason: optionalReason,
-});
 
 export const resyncGuildSchema = z.object({
   guildId: uuid,
@@ -349,7 +241,6 @@ export const syncJobListSchema = paginationWithSort(
   'createdAt',
 ).extend({
   status: enumOf(SyncJobStatus).optional(),
-  departmentId: uuid.optional(),
   guildId: uuid.optional(),
   userId: uuid.optional(),
 });
@@ -377,7 +268,6 @@ export const grantPermissionSchema = z
     capability: z.enum(CAPABILITY_KEYS),
     scopeType: enumOf(PermissionScopeType),
     scopeId: uuid.optional(),
-    maxRankOrder: z.coerce.number().int().min(0).max(1000).optional(),
     maxPermissionLevel: z.coerce.number().int().min(0).max(100).optional(),
     expiresAt: optionalIsoDate,
     reason,
@@ -411,7 +301,6 @@ export const auditQuerySchema = paginationWithSort(['createdAt'], 'createdAt').e
   actorDiscordId: optionalSnowflake,
   targetUserId: uuid.optional(),
   targetDiscordId: optionalSnowflake,
-  departmentId: uuid.optional(),
   guildId: uuid.optional(),
   mappingId: uuid.optional(),
   syncJobId: uuid.optional(),

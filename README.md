@@ -1,12 +1,11 @@
 # Florida Roleplay Manager
 
-Cross-guild Discord role synchronization, department rosters and permissions for a FiveM
-roleplay community that runs one main community server plus a separate Discord server per
-department.
+Cross-guild Discord role synchronization and permissions for a FiveM roleplay community
+that runs one main community server plus a separate Discord server per department.
 
-The central database is the source of truth for official roster data. Discord is made to
-match it — never the other way around, unless a mapping is explicitly configured to work
-that way.
+Roles in the approved guilds are kept in agreement with each other according to explicit,
+auditable configuration: role mappings and time-bounded manual grants. Everything else in
+a member's role list is left strictly alone.
 
 ---
 
@@ -17,14 +16,14 @@ that way.
 - **Cross-guild role mappings.** One-way and two-way, with a configurable authority side,
   separate add/removal switches, priorities, and rejection of anything that would create a
   synchronization loop.
-- **Department rosters.** Departments, rank ladders, memberships, callsigns,
-  certifications, subdivisions, leave of absence, suspensions and transfers.
+- **Manual role grants.** Time-bounded, audited, and automatically taken back when they
+  are revoked or expire — nobody has to remember.
 - **A reconciliation engine.** Desired state − actual state = required changes.
   Deterministic, idempotent, and it never removes a role whose correct value it cannot
   compute.
-- **Granular permissions.** Capability + scope (global / guild / department / subdivision)
-  - maximum manageable rank + maximum manageable authority level, checked in the backend on
-    every action from both Discord and the website.
+- **Granular permissions.** Capability + scope (global / guild) + a maximum manageable
+  authority level, checked in the backend on every action from both Discord and the
+  website.
 - **Immutable audit trail.** Every action, successful or denied, with actor, before/after
   state, reason and correlation id.
 - **A job queue.** BullMQ with exponential backoff, permanent-failure detection, per-member
@@ -36,7 +35,7 @@ that way.
 ## Architecture
 
 ```
-Department Hub Website ─┐
+Community Website ──────┐
                         ├─► Backend API ─┐
 Discord slash commands ─┘                │
          │                               ▼
@@ -111,19 +110,17 @@ Discord application setup and required permissions:
 /guild        list · register · remove · settings · status
 /mapping      create · list · view · edit · test · enable · disable · remove
               approvals · approve · reject
-/resync       member · department · guild · all · preview · status
-/member       lookup · history · link · unlink
-/roster       hire · promote · demote · transfer · loa · return · suspend
-              reinstate · remove · callsign · list
-/certification assign · remove · list · subdivision-add · subdivision-remove
+/role         manage · list · unmanage · grant · revoke · grants
+/resync       member · guild · all · preview · status
+/member       lookup · link · unlink
 /audit        member · mapping · recent · failures · retry
 /permissions  grant · revoke · view
 /system       health
 ```
 
-Anything destructive or large asks for confirmation first, and department/guild/global
-resyncs show a real preview — computed by the same planner that will do the work — before
-anything is applied.
+Anything destructive or large asks for confirmation first, and guild/global resyncs show a
+real preview — computed by the same planner that will do the work — before anything is
+applied.
 
 ## Testing
 
@@ -143,12 +140,12 @@ Coverage of the specification's required cases lives in `tests/`:
 | Area                                           | Where                                                                                 |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------- |
 | One-way and two-way mappings, add/removal sync | `tests/unit/reconciliation.test.js`, `tests/integration/mapping-sync.test.js`         |
-| Roster-authoritative correction                | `tests/unit/reconciliation.test.js`, `tests/integration/sync-runner.test.js`          |
+| Manual grants, expiry and revocation           | `tests/unit/reconciliation.test.js`, `tests/integration/sync-runner.test.js`          |
 | Loop protection                                | `tests/integration/loop-protection.test.js`, `tests/integration/mapping-sync.test.js` |
 | Circular mapping rejection                     | `tests/unit/cycle-detection.test.js`, `tests/integration/services.test.js`            |
 | Protected roles and two-person approval        | `tests/unit/preflight.test.js`, `tests/integration/approvals.test.js`                 |
 | Guild allowlist enforcement                    | `tests/integration/services.test.js`, `tests/integration/api.test.js`                 |
-| Department scopes and rank hierarchy           | `tests/unit/authorization.test.js`, `tests/integration/services.test.js`              |
+| Guild scopes and permission escalation         | `tests/unit/authorization.test.js`, `tests/integration/services.test.js`              |
 | Dry run and reconciliation idempotency         | `tests/integration/sync-runner.test.js`                                               |
 | Unmanaged role preservation                    | `tests/unit/reconciliation.test.js`, `tests/integration/sync-runner.test.js`          |
 | Discord hierarchy failures                     | `tests/unit/preflight.test.js`, `tests/integration/sync-runner.test.js`               |
@@ -170,19 +167,17 @@ Coverage of the specification's required cases lives in `tests/`:
 
 ## Project status
 
-Everything in the specification's initial scope is implemented and covered by tests:
-the allowlist, department and member models, rank hierarchy, one-way and two-way mappings,
-add and removal synchronization, Redis loop protection, the `/mapping` and `/resync`
-commands, internal permission checks, audit logging, BullMQ jobs, failure reporting, the
-REST API, the Docker Compose environment and the automated tests.
+Everything in scope is implemented and covered by tests: the allowlist, the member model,
+managed role definitions, one-way and two-way mappings, add and removal synchronization,
+manual grants with expiry, Redis loop protection, every slash command listed above,
+internal permission checks, audit logging, BullMQ jobs, failure reporting, the REST API,
+the Docker Compose environment and the automated tests.
 
-Deliberately **not** built yet, in line with the specification's ordering:
+Deliberately **not** built yet:
 
 - The Next.js + Tailwind administration dashboard. The API is shaped for it (session
   cookies, CSRF, pagination, `GET /api/me` returning the caller's capabilities) but no
   frontend exists.
-- Department, rank and managed-role creation is available through the API and services,
-  but has no slash command yet; use the API or a seed script.
 
 Three things worth knowing before running this against a live community:
 

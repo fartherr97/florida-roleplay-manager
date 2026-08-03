@@ -37,38 +37,12 @@ enum UserStatus {
   BANNED
 }
 
-enum MembershipStatus {
-  ACTIVE
-  LOA
-  SUSPENDED
-  TERMINATED
-  TRANSFER_PENDING
-  INACTIVE
-}
-
-enum MembershipEventType {
-  HIRED
-  REHIRED
-  PROMOTED
-  DEMOTED
-  TRANSFERRED_IN
-  TRANSFERRED_OUT
-  LOA_STARTED
-  LOA_ENDED
-  SUSPENDED
-  REINSTATED
-  TERMINATED
-  CALLSIGN_CHANGED
-  NOTE_ADDED
-}
-
 enum MappingDirection {
   ONE_WAY
   TWO_WAY
 }
 
 enum AuthoritySource {
-  ROSTER
   SOURCE_DISCORD
   TARGET_DISCORD
   MANUAL
@@ -76,14 +50,6 @@ enum AuthoritySource {
 }
 
 enum RolePurpose {
-  DEPARTMENT_MEMBERSHIP
-  RANK
-  SUPERVISOR
-  COMMAND
-  CERTIFICATION
-  SUBDIVISION
-  STATUS_LOA
-  STATUS_SUSPENDED
   MAPPING
   MANUAL_GRANT
   OTHER
@@ -98,19 +64,16 @@ enum ProtectionLevel {
 enum PermissionScopeType {
   GLOBAL
   GUILD
-  DEPARTMENT
-  SUBDIVISION
 }
 
 enum SyncJobType {
   MEMBER_RESYNC
-  DEPARTMENT_RESYNC
   GUILD_RESYNC
   GLOBAL_RESYNC
   ROLE_ADD
   ROLE_REMOVE
-  ROSTER_CHANGE
   MAPPING_PROPAGATION
+  GRANT_CHANGE
   SCHEDULED_RECONCILIATION
   MAPPING_VALIDATION
 }
@@ -197,48 +160,41 @@ enum PendingApprovalStatus {
 
 /// A community member. One row per person, never one row per guild membership.
 model User {
-  id              String     @id @default(uuid()) @db.Uuid
-  displayName     String
-  email           String?    @unique
-  status          UserStatus @default(ACTIVE)
+  id               String     @id @default(uuid()) @db.Uuid
+  displayName      String
+  email            String?    @unique
+  status           UserStatus @default(ACTIVE)
   /// Authority tier. A user may never act on someone at or above their own level.
-  permissionLevel Int        @default(0)
+  permissionLevel  Int        @default(0)
   /// Whether the account may sign in to the department hub website.
-  websiteAccess   Boolean    @default(false)
+  websiteAccess    Boolean    @default(false)
   /// Denormalized copy of the primary DiscordIdentity for fast lookups.
-  primaryDiscordId String?   @unique
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
-  deletedAt       DateTime?
+  primaryDiscordId String?    @unique
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  deletedAt        DateTime?
 
-  discordIdentities  DiscordIdentity[]      @relation("IdentityOwner")
-  linkedIdentities   DiscordIdentity[]      @relation("IdentityLinker")
-  memberships        DepartmentMembership[]
-  certifications     MemberCertification[]  @relation("CertificationHolder")
-  issuedCertificates MemberCertification[]  @relation("CertificationIssuer")
-  revokedCertificates MemberCertification[] @relation("CertificationRevoker")
-  subdivisions       MemberSubdivision[]    @relation("SubdivisionMember")
-  addedSubdivisions  MemberSubdivision[]    @relation("SubdivisionAdder")
-  permissions        PermissionAssignment[] @relation("PermissionHolder")
-  grantedPermissions PermissionAssignment[] @relation("PermissionGranter")
-  revokedPermissions PermissionAssignment[] @relation("PermissionRevoker")
-  manualGrants       ManualRoleGrant[]      @relation("ManualGrantHolder")
-  issuedManualGrants ManualRoleGrant[]      @relation("ManualGrantIssuer")
-  revokedManualGrants ManualRoleGrant[]     @relation("ManualGrantRevoker")
-  registeredGuilds   ApprovedGuild[]        @relation("GuildRegistrar")
-  removedGuilds      ApprovedGuild[]        @relation("GuildRemover")
-  createdMappings    RoleMapping[]          @relation("MappingCreator")
-  initiatedJobs      SyncJob[]              @relation("JobInitiator")
-  syncActions        SyncAction[]           @relation("SyncActionSubject")
-  syncIssues         SyncIssue[]            @relation("IssueSubject")
-  resolvedIssues     SyncIssue[]            @relation("IssueResolver")
-  auditActions       AuditLog[]             @relation("AuditActor")
-  auditTargets       AuditLog[]             @relation("AuditTarget")
-  membershipEvents   MembershipEvent[]      @relation("MembershipEventActor")
-  requestedApprovals PendingApproval[]      @relation("ApprovalRequester")
-  resolvedApprovals  PendingApproval[]      @relation("ApprovalResolver")
-  approvalVotes      PendingApprovalVote[]
-  systemSettings     SystemSetting[]        @relation("SettingUpdater")
+  discordIdentities   DiscordIdentity[]      @relation("IdentityOwner")
+  linkedIdentities    DiscordIdentity[]      @relation("IdentityLinker")
+  permissions         PermissionAssignment[] @relation("PermissionHolder")
+  grantedPermissions  PermissionAssignment[] @relation("PermissionGranter")
+  revokedPermissions  PermissionAssignment[] @relation("PermissionRevoker")
+  manualGrants        ManualRoleGrant[]      @relation("ManualGrantHolder")
+  issuedManualGrants  ManualRoleGrant[]      @relation("ManualGrantIssuer")
+  revokedManualGrants ManualRoleGrant[]      @relation("ManualGrantRevoker")
+  registeredGuilds    ApprovedGuild[]        @relation("GuildRegistrar")
+  removedGuilds       ApprovedGuild[]        @relation("GuildRemover")
+  createdMappings     RoleMapping[]          @relation("MappingCreator")
+  initiatedJobs       SyncJob[]              @relation("JobInitiator")
+  syncActions         SyncAction[]           @relation("SyncActionSubject")
+  syncIssues          SyncIssue[]            @relation("IssueSubject")
+  resolvedIssues      SyncIssue[]            @relation("IssueResolver")
+  auditActions        AuditLog[]             @relation("AuditActor")
+  auditTargets        AuditLog[]             @relation("AuditTarget")
+  requestedApprovals  PendingApproval[]      @relation("ApprovalRequester")
+  resolvedApprovals   PendingApproval[]      @relation("ApprovalResolver")
+  approvalVotes       PendingApprovalVote[]
+  systemSettings      SystemSetting[]        @relation("SettingUpdater")
 
   @@index([status])
   @@index([deletedAt])
@@ -277,11 +233,9 @@ model ApprovedGuild {
   discordGuildId String    @unique
   name           String
   type           GuildType
-  /// Optional 1:1 association with the department this guild belongs to.
-  departmentId   String?   @unique @db.Uuid
   enabled        Boolean   @default(true)
   syncEnabled    Boolean   @default(true)
-  /// Named feature flags, e.g. ["roster", "mappings", "certifications"].
+  /// Named feature flags, e.g. ["mappings", "manual-grants"].
   features       String[]  @default([])
   notes          String?
   registeredAt   DateTime  @default(now())
@@ -292,9 +246,8 @@ model ApprovedGuild {
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
-  department   Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  registeredBy User?       @relation("GuildRegistrar", fields: [registeredById], references: [id], onDelete: Restrict)
-  removedBy    User?       @relation("GuildRemover", fields: [removedById], references: [id], onDelete: Restrict)
+  registeredBy User? @relation("GuildRegistrar", fields: [registeredById], references: [id], onDelete: Restrict)
+  removedBy    User? @relation("GuildRemover", fields: [removedById], references: [id], onDelete: Restrict)
 
   managedRoles   ManagedRole[]
   sourceMappings RoleMapping[] @relation("MappingSourceGuild")
@@ -311,211 +264,6 @@ model ApprovedGuild {
 }
 
 // ---------------------------------------------------------------------------
-// Departments and ranks
-// ---------------------------------------------------------------------------
-
-model Department {
-  id           String  @id @default(uuid()) @db.Uuid
-  key          String  @unique
-  name         String
-  abbreviation String
-  description  String?
-  enabled      Boolean @default(true)
-
-  /// When a member goes on leave, should their rank roles be removed?
-  removeRankRolesOnLoa        Boolean @default(false)
-  /// When a member is suspended, should their rank roles be removed?
-  removeRankRolesOnSuspension Boolean @default(true)
-  /// When a member is suspended, should department membership roles be removed too?
-  removeMembershipRolesOnSuspension Boolean @default(false)
-
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  guild          ApprovedGuild?
-  ranks          Rank[]
-  memberships    DepartmentMembership[]
-  subdivisions   Subdivision[]
-  certifications Certification[]
-  managedRoles   ManagedRole[]
-  syncJobs       SyncJob[]
-  auditLogs      AuditLog[]
-
-  @@index([enabled])
-  @@index([deletedAt])
-  @@map("departments")
-}
-
-/// A rank inside a department. `order` defines the hierarchy: higher is more senior.
-model Rank {
-  id           String    @id @default(uuid()) @db.Uuid
-  departmentId String    @db.Uuid
-  name         String
-  abbreviation String?
-  order        Int
-  isSupervisor Boolean   @default(false)
-  isCommand    Boolean   @default(false)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
-
-  department   Department             @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  memberships  DepartmentMembership[]
-  managedRoles ManagedRole[]
-  eventsFrom   MembershipEvent[]      @relation("EventFromRank")
-  eventsTo     MembershipEvent[]      @relation("EventToRank")
-
-  @@unique([departmentId, order])
-  @@unique([departmentId, name])
-  @@index([departmentId])
-  @@map("ranks")
-}
-
-/// One row per (member, department). A rehire reuses the row so that the full history
-/// in `MembershipEvent` is never orphaned.
-model DepartmentMembership {
-  id           String           @id @default(uuid()) @db.Uuid
-  userId       String           @db.Uuid
-  departmentId String           @db.Uuid
-  rankId       String           @db.Uuid
-  status       MembershipStatus @default(ACTIVE)
-  callsign     String?
-  badgeNumber  String?
-  hireDate     DateTime         @default(now())
-  rankDate     DateTime         @default(now())
-  /// End date for a temporary status such as LOA or suspension.
-  statusUntil  DateTime?
-  statusReason String?
-  notes        String?
-  isPrimary    Boolean          @default(false)
-  terminatedAt DateTime?
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
-  deletedAt    DateTime?
-
-  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  department Department        @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  rank       Rank              @relation(fields: [rankId], references: [id], onDelete: Restrict)
-  events     MembershipEvent[]
-
-  @@unique([userId, departmentId])
-  @@unique([departmentId, callsign])
-  @@index([departmentId, status])
-  @@index([userId])
-  @@index([status])
-  @@map("department_memberships")
-}
-
-/// Immutable record of everything that ever happened to a membership.
-model MembershipEvent {
-  id             String              @id @default(uuid()) @db.Uuid
-  membershipId   String              @db.Uuid
-  type           MembershipEventType
-  fromRankId     String?             @db.Uuid
-  toRankId       String?             @db.Uuid
-  fromDepartment String?
-  toDepartment   String?
-  actorUserId    String?             @db.Uuid
-  actorDiscordId String?
-  reason         String?
-  metadata       Json?
-  createdAt      DateTime            @default(now())
-
-  membership DepartmentMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
-  fromRank   Rank?                @relation("EventFromRank", fields: [fromRankId], references: [id], onDelete: Restrict)
-  toRank     Rank?                @relation("EventToRank", fields: [toRankId], references: [id], onDelete: Restrict)
-  actor      User?                @relation("MembershipEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
-
-  @@index([membershipId, createdAt])
-  @@index([type])
-  @@map("membership_events")
-}
-
-// ---------------------------------------------------------------------------
-// Certifications and subdivisions
-// ---------------------------------------------------------------------------
-
-model Certification {
-  id               String    @id @default(uuid()) @db.Uuid
-  key              String    @unique
-  name             String
-  description      String?
-  /// Null means the certification is community-wide rather than department specific.
-  departmentId     String?   @db.Uuid
-  /// When set, assignments default to expiring this many days after issue.
-  expiresAfterDays Int?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  deletedAt        DateTime?
-
-  department   Department?           @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  members      MemberCertification[]
-  managedRoles ManagedRole[]
-
-  @@index([departmentId])
-  @@map("certifications")
-}
-
-model MemberCertification {
-  id              String    @id @default(uuid()) @db.Uuid
-  userId          String    @db.Uuid
-  certificationId String    @db.Uuid
-  issuedAt        DateTime  @default(now())
-  expiresAt       DateTime?
-  issuedById      String?   @db.Uuid
-  revokedAt       DateTime?
-  revokedById     String?   @db.Uuid
-  reason          String?
-
-  user          User          @relation("CertificationHolder", fields: [userId], references: [id], onDelete: Cascade)
-  certification Certification @relation(fields: [certificationId], references: [id], onDelete: Restrict)
-  issuedBy      User?         @relation("CertificationIssuer", fields: [issuedById], references: [id], onDelete: Restrict)
-  revokedBy     User?         @relation("CertificationRevoker", fields: [revokedById], references: [id], onDelete: Restrict)
-
-  @@unique([userId, certificationId])
-  @@index([certificationId])
-  @@index([expiresAt])
-  @@map("member_certifications")
-}
-
-model Subdivision {
-  id           String    @id @default(uuid()) @db.Uuid
-  departmentId String    @db.Uuid
-  key          String
-  name         String
-  description  String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
-
-  department   Department          @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  members      MemberSubdivision[]
-  managedRoles ManagedRole[]
-
-  @@unique([departmentId, key])
-  @@index([departmentId])
-  @@map("subdivisions")
-}
-
-model MemberSubdivision {
-  id            String    @id @default(uuid()) @db.Uuid
-  userId        String    @db.Uuid
-  subdivisionId String    @db.Uuid
-  joinedAt      DateTime  @default(now())
-  leftAt        DateTime?
-  addedById     String?   @db.Uuid
-
-  user        User        @relation("SubdivisionMember", fields: [userId], references: [id], onDelete: Cascade)
-  subdivision Subdivision @relation(fields: [subdivisionId], references: [id], onDelete: Restrict)
-  addedBy     User?       @relation("SubdivisionAdder", fields: [addedById], references: [id], onDelete: Restrict)
-
-  @@unique([userId, subdivisionId])
-  @@index([subdivisionId])
-  @@map("member_subdivisions")
-}
-
-// ---------------------------------------------------------------------------
 // Managed roles and mappings
 // ---------------------------------------------------------------------------
 
@@ -527,11 +275,7 @@ model ManagedRole {
   approvedGuildId String          @db.Uuid
   discordRoleId   String
   name            String
-  purpose         RolePurpose
-  departmentId    String?         @db.Uuid
-  rankId          String?         @db.Uuid
-  certificationId String?         @db.Uuid
-  subdivisionId   String?         @db.Uuid
+  purpose         RolePurpose     @default(MAPPING)
   protectionLevel ProtectionLevel @default(NONE)
   /// False marks a role as "known but hands off" - it participates in conflict
   /// detection but is never added or removed automatically.
@@ -540,18 +284,12 @@ model ManagedRole {
   updatedAt       DateTime        @updatedAt
   deletedAt       DateTime?
 
-  guild         ApprovedGuild     @relation(fields: [approvedGuildId], references: [id], onDelete: Cascade)
-  department    Department?       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  rank          Rank?             @relation(fields: [rankId], references: [id], onDelete: Restrict)
-  certification Certification?    @relation(fields: [certificationId], references: [id], onDelete: Restrict)
-  subdivision   Subdivision?      @relation(fields: [subdivisionId], references: [id], onDelete: Restrict)
-  manualGrants  ManualRoleGrant[]
-  syncActions   SyncAction[]
+  guild        ApprovedGuild     @relation(fields: [approvedGuildId], references: [id], onDelete: Cascade)
+  manualGrants ManualRoleGrant[]
+  syncActions  SyncAction[]
 
   @@unique([approvedGuildId, discordRoleId])
-  @@index([departmentId])
   @@index([purpose])
-  @@index([rankId])
   @@map("managed_roles")
 }
 
@@ -639,7 +377,7 @@ model PermissionCapability {
 }
 
 /// A capability granted to a user within a scope, optionally bounded by a maximum
-/// manageable rank and a maximum manageable permission level.
+/// manageable permission level.
 model PermissionAssignment {
   id                 String              @id @default(uuid()) @db.Uuid
   userId             String              @db.Uuid
@@ -648,7 +386,6 @@ model PermissionAssignment {
   /// Empty string for GLOBAL scope so the unique constraint stays enforceable
   /// (Postgres treats NULLs as distinct inside unique indexes).
   scopeId            String              @default("")
-  maxRankOrder       Int?
   maxPermissionLevel Int?
   grantedById        String?             @db.Uuid
   grantedAt          DateTime            @default(now())
@@ -674,34 +411,32 @@ model PermissionAssignment {
 // ---------------------------------------------------------------------------
 
 model SyncJob {
-  id                String        @id @default(uuid()) @db.Uuid
-  type              SyncJobType
-  status            SyncJobStatus @default(PENDING)
-  source            ActionSource
-  initiatedById     String?       @db.Uuid
+  id                   String        @id @default(uuid()) @db.Uuid
+  type                 SyncJobType
+  status               SyncJobStatus @default(PENDING)
+  source               ActionSource
+  initiatedById        String?       @db.Uuid
   initiatedByDiscordId String?
-  departmentId      String?       @db.Uuid
-  approvedGuildId   String?       @db.Uuid
-  targetUserId      String?       @db.Uuid
-  mappingId         String?       @db.Uuid
-  dryRun            Boolean       @default(false)
-  progressTotal     Int           @default(0)
-  progressCompleted Int           @default(0)
-  attempts          Int           @default(0)
-  queueJobId        String?
-  parentJobId       String?       @db.Uuid
-  requestId         String?
-  reason            String?
-  payload           Json?
-  error             Json?
+  approvedGuildId      String?       @db.Uuid
+  targetUserId         String?       @db.Uuid
+  mappingId            String?       @db.Uuid
+  dryRun               Boolean       @default(false)
+  progressTotal        Int           @default(0)
+  progressCompleted    Int           @default(0)
+  attempts             Int           @default(0)
+  queueJobId           String?
+  parentJobId          String?       @db.Uuid
+  requestId            String?
+  reason               String?
+  payload              Json?
+  error                Json?
   /// True when the maximum-change threshold paused this job.
-  thresholdBreached Boolean       @default(false)
-  createdAt         DateTime      @default(now())
-  startedAt         DateTime?
-  completedAt       DateTime?
+  thresholdBreached    Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
 
   initiatedBy User?          @relation("JobInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
-  department  Department?    @relation(fields: [departmentId], references: [id], onDelete: Restrict)
   guild       ApprovedGuild? @relation(fields: [approvedGuildId], references: [id], onDelete: Restrict)
   mapping     RoleMapping?   @relation(fields: [mappingId], references: [id], onDelete: Restrict)
   parent      SyncJob?       @relation("JobChildren", fields: [parentJobId], references: [id], onDelete: Cascade)
@@ -714,7 +449,6 @@ model SyncJob {
   @@index([status, createdAt])
   @@index([type])
   @@index([targetUserId])
-  @@index([departmentId])
   @@index([createdAt])
   @@map("sync_jobs")
 }
@@ -733,7 +467,7 @@ model SyncAction {
   roleName        String?
   managedRoleId   String?          @db.Uuid
   mappingId       String?          @db.Uuid
-  /// Human readable explanation, e.g. "rank: Corporal" or "mapping: Media Team".
+  /// Human readable explanation, e.g. "mapping: Media Team".
   reason          String
   attempt         Int              @default(0)
   error           String?
@@ -806,7 +540,6 @@ model AuditLog {
   actorDiscordId  String?
   targetUserId    String?      @db.Uuid
   targetDiscordId String?
-  departmentId    String?      @db.Uuid
   approvedGuildId String?      @db.Uuid
   mappingId       String?      @db.Uuid
   syncJobId       String?      @db.Uuid
@@ -821,12 +554,11 @@ model AuditLog {
   errorMessage    String?
   createdAt       DateTime     @default(now())
 
-  actor      User?          @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
-  target     User?          @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: Restrict)
-  department Department?    @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  guild      ApprovedGuild? @relation(fields: [approvedGuildId], references: [id], onDelete: Restrict)
-  mapping    RoleMapping?   @relation(fields: [mappingId], references: [id], onDelete: Restrict)
-  job        SyncJob?       @relation(fields: [syncJobId], references: [id], onDelete: Restrict)
+  actor   User?          @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  target  User?          @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: Restrict)
+  guild   ApprovedGuild? @relation(fields: [approvedGuildId], references: [id], onDelete: Restrict)
+  mapping RoleMapping?   @relation(fields: [mappingId], references: [id], onDelete: Restrict)
+  job     SyncJob?       @relation(fields: [syncJobId], references: [id], onDelete: Restrict)
 
   @@index([createdAt])
   @@index([actorUserId, createdAt])

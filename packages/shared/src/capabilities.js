@@ -6,19 +6,19 @@
  *
  * `allowedScopes` documents which scope types are meaningful for a capability. The
  * authorization engine rejects an assignment whose scope type is not listed, which stops
- * an operator from accidentally creating, for example, a department-scoped
- * `guild.register` grant that would read as "may register guilds" at evaluation time.
+ * an operator from accidentally creating, for example, a guild-scoped `guild.register`
+ * grant that would read as "may register guilds" at evaluation time.
  */
 import { PermissionScopeType } from './enums.js';
 
-const { GLOBAL, GUILD, DEPARTMENT, SUBDIVISION } = PermissionScopeType;
+const { GLOBAL, GUILD } = PermissionScopeType;
 
 /** Numeric authority tiers. A user may never act on someone at or above their own tier. */
 export const PermissionLevel = Object.freeze({
   MEMBER: 0,
   SUPERVISOR: 20,
   COMMAND: 40,
-  DEPARTMENT_HEAD: 60,
+  MANAGER: 60,
   STAFF: 80,
   GLOBAL_ADMIN: 100,
 });
@@ -74,7 +74,7 @@ const DEFINITIONS = [
     key: 'mapping.view',
     category: 'mapping',
     description: 'View cross-guild role mappings.',
-    allowedScopes: [GLOBAL, GUILD, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: false,
     minLevel: PermissionLevel.SUPERVISOR,
   },
@@ -82,7 +82,7 @@ const DEFINITIONS = [
     key: 'mapping.create',
     category: 'mapping',
     description: 'Create a cross-guild role mapping.',
-    allowedScopes: [GLOBAL, GUILD, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: true,
     minLevel: PermissionLevel.STAFF,
   },
@@ -90,7 +90,7 @@ const DEFINITIONS = [
     key: 'mapping.update',
     category: 'mapping',
     description: 'Edit, enable or disable a role mapping.',
-    allowedScopes: [GLOBAL, GUILD, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: true,
     minLevel: PermissionLevel.STAFF,
   },
@@ -98,7 +98,7 @@ const DEFINITIONS = [
     key: 'mapping.delete',
     category: 'mapping',
     description: 'Delete a role mapping.',
-    allowedScopes: [GLOBAL, GUILD, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: true,
     minLevel: PermissionLevel.STAFF,
   },
@@ -106,7 +106,7 @@ const DEFINITIONS = [
     key: 'mapping.test',
     category: 'mapping',
     description: 'Run mapping validation without applying changes.',
-    allowedScopes: [GLOBAL, GUILD, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: false,
     minLevel: PermissionLevel.SUPERVISOR,
   },
@@ -119,22 +119,40 @@ const DEFINITIONS = [
     minLevel: PermissionLevel.GLOBAL_ADMIN,
   },
 
+  // --- Managed roles and grants ---------------------------------------------
+  {
+    key: 'role.manage',
+    category: 'role',
+    description: 'Declare which Discord roles the platform is allowed to control.',
+    allowedScopes: [GLOBAL, GUILD],
+    dangerous: true,
+    minLevel: PermissionLevel.STAFF,
+  },
+  {
+    key: 'grant.issue',
+    category: 'grant',
+    description: 'Issue a time-bounded manual role grant to a member.',
+    allowedScopes: [GLOBAL, GUILD],
+    dangerous: true,
+    minLevel: PermissionLevel.COMMAND,
+  },
+  {
+    key: 'grant.revoke',
+    category: 'grant',
+    description: 'Revoke a manual role grant.',
+    allowedScopes: [GLOBAL, GUILD],
+    dangerous: false,
+    minLevel: PermissionLevel.COMMAND,
+  },
+
   // --- Synchronization ------------------------------------------------------
   {
     key: 'sync.member',
     category: 'sync',
     description: 'Resynchronize a single member.',
-    allowedScopes: [GLOBAL, GUILD, DEPARTMENT, SUBDIVISION],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: false,
     minLevel: PermissionLevel.SUPERVISOR,
-  },
-  {
-    key: 'sync.department',
-    category: 'sync',
-    description: 'Resynchronize every member of a department.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: true,
-    minLevel: PermissionLevel.COMMAND,
   },
   {
     key: 'sync.guild',
@@ -156,141 +174,17 @@ const DEFINITIONS = [
     key: 'sync.issue.retry',
     category: 'sync',
     description: 'Retry an individual failed synchronization action.',
-    allowedScopes: [GLOBAL, GUILD, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: false,
     minLevel: PermissionLevel.SUPERVISOR,
   },
 
-  // --- Roster ---------------------------------------------------------------
-  {
-    key: 'roster.view',
-    category: 'roster',
-    description: 'View department rosters and member records.',
-    allowedScopes: [GLOBAL, DEPARTMENT, SUBDIVISION],
-    dangerous: false,
-    minLevel: PermissionLevel.MEMBER,
-  },
-  {
-    key: 'roster.add',
-    category: 'roster',
-    description: 'Hire a member into a department.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: false,
-    minLevel: PermissionLevel.COMMAND,
-  },
-  {
-    key: 'roster.remove',
-    category: 'roster',
-    description: 'Terminate a department membership.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: true,
-    minLevel: PermissionLevel.COMMAND,
-  },
-  {
-    key: 'roster.promote',
-    category: 'roster',
-    description: 'Promote a member to a higher rank.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: false,
-    minLevel: PermissionLevel.COMMAND,
-  },
-  {
-    key: 'roster.demote',
-    category: 'roster',
-    description: 'Demote a member to a lower rank.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: true,
-    minLevel: PermissionLevel.COMMAND,
-  },
-  {
-    key: 'roster.transfer',
-    category: 'roster',
-    description: 'Transfer a member between departments.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: true,
-    minLevel: PermissionLevel.COMMAND,
-  },
-  {
-    key: 'roster.suspend',
-    category: 'roster',
-    description: 'Suspend a member.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: true,
-    minLevel: PermissionLevel.COMMAND,
-  },
-  {
-    key: 'roster.reinstate',
-    category: 'roster',
-    description: 'Reinstate a suspended member.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: false,
-    minLevel: PermissionLevel.COMMAND,
-  },
-  {
-    key: 'roster.loa',
-    category: 'roster',
-    description: 'Place a member on leave of absence or return them from leave.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: false,
-    minLevel: PermissionLevel.SUPERVISOR,
-  },
-  {
-    key: 'roster.callsign',
-    category: 'roster',
-    description: 'Change a member callsign.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: false,
-    minLevel: PermissionLevel.SUPERVISOR,
-  },
-
-  // --- Certifications and subdivisions --------------------------------------
-  {
-    key: 'certification.assign',
-    category: 'certification',
-    description: 'Assign a certification to a member.',
-    allowedScopes: [GLOBAL, DEPARTMENT, SUBDIVISION],
-    dangerous: false,
-    minLevel: PermissionLevel.SUPERVISOR,
-  },
-  {
-    key: 'certification.remove',
-    category: 'certification',
-    description: 'Remove a certification from a member.',
-    allowedScopes: [GLOBAL, DEPARTMENT, SUBDIVISION],
-    dangerous: false,
-    minLevel: PermissionLevel.SUPERVISOR,
-  },
-  {
-    key: 'subdivision.assign',
-    category: 'subdivision',
-    description: 'Add a member to a subdivision.',
-    allowedScopes: [GLOBAL, DEPARTMENT, SUBDIVISION],
-    dangerous: false,
-    minLevel: PermissionLevel.SUPERVISOR,
-  },
-  {
-    key: 'subdivision.remove',
-    category: 'subdivision',
-    description: 'Remove a member from a subdivision.',
-    allowedScopes: [GLOBAL, DEPARTMENT, SUBDIVISION],
-    dangerous: false,
-    minLevel: PermissionLevel.SUPERVISOR,
-  },
-
-  // --- Departments and members ----------------------------------------------
-  {
-    key: 'department.manage',
-    category: 'department',
-    description: 'Create or modify departments, ranks and managed role definitions.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
-    dangerous: true,
-    minLevel: PermissionLevel.DEPARTMENT_HEAD,
-  },
+  // --- Members --------------------------------------------------------------
   {
     key: 'member.view',
     category: 'member',
     description: 'Look up a community member profile.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: false,
     minLevel: PermissionLevel.MEMBER,
   },
@@ -308,7 +202,7 @@ const DEFINITIONS = [
     key: 'audit.view',
     category: 'audit',
     description: 'View audit records.',
-    allowedScopes: [GLOBAL, GUILD, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: false,
     minLevel: PermissionLevel.COMMAND,
   },
@@ -326,7 +220,7 @@ const DEFINITIONS = [
     key: 'permission.view',
     category: 'permission',
     description: 'View permission assignments.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: false,
     minLevel: PermissionLevel.COMMAND,
   },
@@ -334,17 +228,17 @@ const DEFINITIONS = [
     key: 'permission.grant',
     category: 'permission',
     description: 'Grant a capability to a user, never above the granter own authority.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: true,
-    minLevel: PermissionLevel.DEPARTMENT_HEAD,
+    minLevel: PermissionLevel.MANAGER,
   },
   {
     key: 'permission.revoke',
     category: 'permission',
     description: 'Revoke a capability from a user.',
-    allowedScopes: [GLOBAL, DEPARTMENT],
+    allowedScopes: [GLOBAL, GUILD],
     dangerous: true,
-    minLevel: PermissionLevel.DEPARTMENT_HEAD,
+    minLevel: PermissionLevel.MANAGER,
   },
   {
     key: 'system.manage',
@@ -366,7 +260,7 @@ export const CAPABILITIES = Object.freeze(DEFINITIONS);
 export const CAPABILITY_KEYS = Object.freeze(DEFINITIONS.map((def) => def.key));
 
 /**
- * Convenience object so code can write `Capability.ROSTER_PROMOTE` instead of a
+ * Convenience object so code can write `Capability.MAPPING_CREATE` instead of a
  * stringly-typed key that a typo would silently break.
  */
 export const Capability = Object.freeze(

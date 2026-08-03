@@ -32,21 +32,16 @@ duplication safe.
 
 **Allowlist and structure**
 
-| Model                          | Purpose                                                                                                |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `ApprovedGuild`                | The allowlist. Nothing works in a guild that is absent or disabled.                                    |
-| `Department`, `Rank`           | Departments and their ordered rank ladders                                                             |
-| `Subdivision`, `Certification` | Optional qualifications, department-scoped or community-wide                                           |
-| `ManagedRole`                  | A Discord role the platform is allowed to control. **Only roles with a row here can ever be removed.** |
+| Model           | Purpose                                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------------------ |
+| `ApprovedGuild` | The allowlist. Nothing works in a guild that is absent or disabled.                                    |
+| `ManagedRole`   | A Discord role the platform is allowed to control. **Only roles with a row here can ever be removed.** |
 
-**Membership**
+**Grants**
 
-| Model                                      | Purpose                                                                     |
-| ------------------------------------------ | --------------------------------------------------------------------------- |
-| `DepartmentMembership`                     | One row per (member, department); a rehire reuses the row                   |
-| `MembershipEvent`                          | Immutable history: hire, promote, demote, transfer, LOA, suspend, terminate |
-| `MemberCertification`, `MemberSubdivision` | Current qualifications, revocable rather than deleted                       |
-| `ManualRoleGrant`                          | Time-bounded manual authority for sensitive access                          |
+| Model             | Purpose                                                                    |
+| ----------------- | -------------------------------------------------------------------------- |
+| `ManualRoleGrant` | Time-bounded manual authority; revoked or expired means the role comes off |
 
 **Synchronization**
 
@@ -59,19 +54,18 @@ duplication safe.
 
 **Governance**
 
-| Model                                    | Purpose                                                           |
-| ---------------------------------------- | ----------------------------------------------------------------- |
-| `PermissionCapability`                   | Catalogue, seeded from `packages/shared/src/capabilities.js`      |
-| `PermissionAssignment`                   | A capability granted in a scope, with rank and authority ceilings |
-| `PendingApproval`, `PendingApprovalVote` | Two-person rule for protected mappings                            |
-| `AuditLog`                               | Append-only trail                                                 |
-| `SystemSetting`                          | Runtime-tunable settings such as the removal threshold            |
+| Model                                    | Purpose                                                      |
+| ---------------------------------------- | ------------------------------------------------------------ |
+| `PermissionCapability`                   | Catalogue, seeded from `packages/shared/src/capabilities.js` |
+| `PermissionAssignment`                   | A capability granted in a scope, with an authority ceiling   |
+| `PendingApproval`, `PendingApprovalVote` | Two-person rule for protected mappings                       |
+| `AuditLog`                               | Append-only trail                                            |
+| `SystemSetting`                          | Runtime-tunable settings such as the removal threshold       |
 
 ## Conventions worth knowing
 
 **Soft deletion.** Records that carry history use `deletedAt`: `User`, `ApprovedGuild`,
-`Department`, `Rank`, `RoleMapping`, `ManagedRole`, `Certification`, `Subdivision`,
-`DepartmentMembership`. Queries filter with the `notDeleted` helper.
+`RoleMapping`, `ManagedRole`. Queries filter with the `notDeleted` helper.
 
 **Restore rather than duplicate.** Natural-key uniqueness (one approved guild per Discord
 guild, one mapping per role pair) is enforced with a plain unique constraint. Re-creating a
@@ -95,8 +89,9 @@ Run migrations as a separate, more privileged role.
 
 **Indexes.** Every foreign key used in a filter is indexed, plus composite indexes for the
 access patterns that actually happen: `(status, createdAt)` on jobs, `(resolved, createdAt)`
-on issues, `(actorUserId, createdAt)` and `(targetUserId, createdAt)` on audit records, and
-`(departmentId, status)` on memberships.
+on issues, `(actorUserId, createdAt)`, `(targetUserId, createdAt)` and `(action, createdAt)`
+on audit records, and `(sourceGuildId, sourceRoleId)` / `(targetGuildId, targetRoleId)` on
+mappings, which is how the event handler decides whether a changed role matters.
 
 ## Seeding
 

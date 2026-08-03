@@ -37,25 +37,10 @@ export const data = new SlashCommandBuilder()
       .addStringOption(reasonOption(true))
       .addStringOption((option) =>
         option
-          .setName('department')
-          .setDescription('Department scope (required unless GLOBAL)')
-          .setRequired(false)
-          .setAutocomplete(true),
-      )
-      .addStringOption((option) =>
-        option
           .setName('guild')
-          .setDescription('Guild scope (required for GUILD scope)')
+          .setDescription('Guild scope (required unless GLOBAL)')
           .setRequired(false)
           .setAutocomplete(true),
-      )
-      .addIntegerOption((option) =>
-        option
-          .setName('max_rank_order')
-          .setDescription('Highest rank order they may manage')
-          .setMinValue(0)
-          .setMaxValue(1000)
-          .setRequired(false),
       )
       .addIntegerOption((option) =>
         option
@@ -103,13 +88,8 @@ async function handleGrant(interaction, ctx) {
   const capability = interaction.options.getString('capability');
   const scopeType = interaction.options.getString('scope_type');
   const scopeId =
-    scopeType === PermissionScopeType.DEPARTMENT
-      ? interaction.options.getString('department')
-      : scopeType === PermissionScopeType.GUILD
-        ? interaction.options.getString('guild')
-        : undefined;
+    scopeType === PermissionScopeType.GUILD ? interaction.options.getString('guild') : undefined;
 
-  const maxRankOrder = interaction.options.getInteger('max_rank_order');
   const maxAuthority = interaction.options.getInteger('max_authority');
 
   const confirmed = await requestConfirmation(interaction, {
@@ -117,7 +97,6 @@ async function handleGrant(interaction, ctx) {
     description: `<@${user.id}> will be able to use **${capability}**.`,
     fields: [
       { name: 'Scope', value: `${scopeType}${scopeId ? ` (${scopeId})` : ''}`, inline: true },
-      { name: 'Max rank order', value: orDash(maxRankOrder), inline: true },
       { name: 'Max authority', value: orDash(maxAuthority), inline: true },
     ],
     confirmLabel: 'Grant permission',
@@ -130,7 +109,6 @@ async function handleGrant(interaction, ctx) {
     capability,
     scopeType,
     ...(scopeId ? { scopeId } : {}),
-    ...(maxRankOrder === null ? {} : { maxRankOrder }),
     ...(maxAuthority === null ? {} : { maxPermissionLevel: maxAuthority }),
     reason: interaction.options.getString('reason'),
   });
@@ -186,8 +164,8 @@ async function handleView(interaction, ctx) {
   const lines = page.items.map(
     (assignment) =>
       `**${assignment.capabilityKey}** — ${assignment.scopeLabel}\n` +
-      `> holder: ${assignment.user.displayName} · rank ceiling: ${orDash(assignment.maxRankOrder)} · ` +
-      `authority ceiling: ${orDash(assignment.maxPermissionLevel)}\n> \`${assignment.id}\``,
+      `> holder: ${assignment.user.displayName} · authority ceiling: ${orDash(assignment.maxPermissionLevel)}\n` +
+      `> \`${assignment.id}\``,
   );
 
   return interaction.editReply({

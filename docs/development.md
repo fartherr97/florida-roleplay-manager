@@ -33,9 +33,9 @@ npm run prisma:migrate       # creates the schema and generates the client
 npm run db:seed -- --demo    # capabilities, settings, admins, and a demo community
 ```
 
-`--demo` builds two departments, three guilds, a rank ladder, managed roles, a one-way and
-a two-way mapping, and three members — enough to exercise every command without touching a
-real server. It is refused when `NODE_ENV=production`.
+`--demo` builds three guilds, seven managed roles, a one-way and a two-way mapping, and a
+member holding a manual grant — enough to exercise every command without touching a real
+server. It is refused when `NODE_ENV=production`.
 
 Register the slash commands. Guild-scoped registration is instant; global registration can
 take up to an hour, so use `--guild` while developing:

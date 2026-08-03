@@ -1,35 +1,31 @@
 /**
  * Scheduled maintenance.
  *
- * Two sweeps, both of which produce a report and audit records rather than quietly
+ * Three sweeps, all of which produce a report and audit records rather than quietly
  * changing things:
  *
  *   - **Mapping validation** (daily): every enabled mapping is re-checked against live
  *     Discord. Deleted roles, lost permissions, roles moved above the bot and de-listed
  *     guilds are all found here rather than during a member's sync.
- *   - **Scheduled reconciliation** (every six hours): the whole active roster is
- *     reconciled. The maximum-change threshold in the runner is what keeps this from
- *     ever becoming a mass removal.
+ *   - **Managed role validation** (daily): the same checks for managed roles that no
+ *     mapping happens to reference, which would otherwise go unverified until a grant
+ *     needed them.
+ *   - **Scheduled reconciliation** (every six hours): every member of every approved
+ *     guild is reconciled. The maximum-change threshold in the runner is what keeps this
+ *     from ever becoming a mass removal.
  *
- * A third check runs alongside them: members holding platform-managed roles without a
- * matching roster record. That is *reported*, never auto-corrected, because the right
- * answer (hire them, or remove the role) is a human decision.
+ * Nothing here auto-corrects a role: broken configuration is reported for a human, and
+ * only reconciliation changes Discord.
  */
 import { getPrisma, notDeleted } from '@frm/database';
 import { createLogger, serializeError } from '@frm/logging';
-import {
-  AuditAction,
-  IssueSeverity,
-  MembershipStatus,
-  ROSTER_DRIVEN_PURPOSES,
-  SyncIssueType,
-  SyncJobType,
-} from '@frm/shared';
+import { AuditAction, IssueSeverity, SyncIssueType, SyncJobType } from '@frm/shared';
 import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
 import { notifyGlobalAdmins } from './notify.js';
 import { createSyncJob } from './sync-service.js';
 import { runSyncJob } from './sync-runner.js';
+import { expireGrants } from './grant-service.js';
 
 const log = createLogger('core.maintenance');
 
@@ -189,113 +185,123 @@ export async function runMappingValidation({ gateway, prisma = getPrisma() }) {
 }
 
 /**
- * Finds members who hold a platform-managed role without a roster record that justifies
- * it, and members missing from a guild their department requires.
+ * Checks every managed role definition against live Discord.
  *
- * Reported only. Auto-removing here would be a mass-removal path that bypasses the
- * threshold guard, which is precisely what the specification warns against.
+ * Reported only. A managed role that has been deleted in Discord is a configuration
+ * problem for a human to fix; silently dropping the definition would quietly remove the
+ * platform's ability to manage a role somebody deliberately put under its control.
+ *
+ * @param {object} params
+ * @param {object} params.gateway
+ * @param {import('@prisma/client').PrismaClient} [params.prisma]
  */
-export async function detectRosterDrift({ gateway, prisma = getPrisma() }) {
-  const ctx = systemContext({ scheduled: true, label: 'roster-drift' });
+export async function validateManagedRoles({ gateway, prisma = getPrisma() }) {
+  const ctx = systemContext({ scheduled: true, label: 'managed-role-validation' });
 
   const guilds = await prisma.approvedGuild.findMany({
     where: { ...notDeleted, enabled: true, syncEnabled: true },
-    select: { id: true, discordGuildId: true, name: true, departmentId: true },
+    select: { id: true, discordGuildId: true, name: true },
   });
 
-  const report = { unmanagedHolders: [], missingFromGuild: [], checkedGuilds: guilds.length };
+  const report = { checked: 0, healthy: 0, problems: [] };
 
   for (const guild of guilds) {
     const managedRoles = await prisma.managedRole.findMany({
-      where: {
-        approvedGuildId: guild.id,
-        ...notDeleted,
-        managedByPlatform: true,
-        purpose: { in: ROSTER_DRIVEN_PURPOSES },
-      },
-      select: { id: true, discordRoleId: true, name: true, departmentId: true },
+      where: { approvedGuildId: guild.id, ...notDeleted, managedByPlatform: true },
+      select: { id: true, discordRoleId: true, name: true },
     });
     if (managedRoles.length === 0) continue;
 
-    // Members who should be in this guild but are not.
-    if (guild.departmentId) {
-      const memberships = await prisma.departmentMembership.findMany({
-        where: {
-          departmentId: guild.departmentId,
-          ...notDeleted,
-          status: { not: MembershipStatus.TERMINATED },
-        },
-        include: { user: { select: { id: true, displayName: true, primaryDiscordId: true } } },
-      });
+    const live = await gateway.getGuild(guild.discordGuildId).catch(() => null);
+    const roles = live ? await gateway.listRoles(guild.discordGuildId).catch(() => []) : [];
+    const byId = new Map(roles.map((role) => [role.id, role]));
 
-      for (const membership of memberships) {
-        const discordUserId = membership.user.primaryDiscordId;
-        if (!discordUserId) {
-          report.missingFromGuild.push({
-            userId: membership.userId,
-            guildId: guild.id,
-            reason: 'no linked Discord account',
-          });
-          continue;
-        }
-        const member = await gateway
-          .getMember(guild.discordGuildId, discordUserId)
-          .catch(() => null);
-        if (!member) {
-          report.missingFromGuild.push({
-            userId: membership.userId,
-            displayName: membership.user.displayName,
-            guildId: guild.id,
-            guildName: guild.name,
-            reason: 'not in the department Discord server',
-          });
-        }
+    for (const managed of managedRoles) {
+      report.checked += 1;
+      const problem = describeRoleProblem(managed, byId.get(managed.discordRoleId), live);
+
+      if (!problem) {
+        report.healthy += 1;
+        continue;
       }
-    }
-  }
 
-  // Record the findings as issues so they show up in /audit failures alongside
-  // everything else an administrator needs to act on.
-  for (const entry of report.missingFromGuild.slice(0, 200)) {
-    await prisma.syncIssue
-      .create({
-        data: {
-          type: SyncIssueType.MEMBER_NOT_IN_GUILD,
-          severity: IssueSeverity.WARNING,
-          approvedGuildId: entry.guildId,
-          userId: entry.userId,
-          message: `${entry.displayName ?? 'A roster member'} is on the roster but ${entry.reason}.`,
-          details: { reason: entry.reason },
-        },
-      })
-      .catch(() => {});
+      report.problems.push({ managedRoleId: managed.id, guild: guild.name, ...problem });
+      await prisma.syncIssue
+        .create({
+          data: {
+            type: problem.type,
+            severity: IssueSeverity.ERROR,
+            approvedGuildId: guild.id,
+            discordGuildId: guild.discordGuildId,
+            discordRoleId: managed.discordRoleId,
+            message: `Managed role "${managed.name}" in ${guild.name}: ${problem.message}`,
+          },
+        })
+        .catch(() => {});
+    }
   }
 
   await recordAudit(prisma, {
     ctx,
-    action: 'maintenance.roster_drift',
+    action: 'maintenance.managed_role_validation',
     newState: {
-      checkedGuilds: report.checkedGuilds,
-      missingFromGuild: report.missingFromGuild.length,
+      checked: report.checked,
+      healthy: report.healthy,
+      problems: report.problems.length,
     },
   });
 
   log.info(
-    { missingFromGuild: report.missingFromGuild.length, guilds: report.checkedGuilds },
-    'roster drift check finished',
+    { checked: report.checked, healthy: report.healthy, problems: report.problems.length },
+    'managed role validation finished',
   );
   return report;
 }
 
+function describeRoleProblem(managed, liveRole, liveGuild) {
+  if (!liveGuild || !liveGuild.botPresent) {
+    return { type: SyncIssueType.BOT_NOT_IN_GUILD, message: 'the bot is not in that guild.' };
+  }
+  if (!liveRole) {
+    return { type: SyncIssueType.ROLE_DELETED, message: 'the role no longer exists in Discord.' };
+  }
+  if (liveRole.managed) {
+    return {
+      type: SyncIssueType.INTEGRATION_MANAGED_ROLE,
+      message: 'the role is now owned by another integration and cannot be applied.',
+    };
+  }
+  if (liveRole.position >= liveGuild.botHighestRolePosition) {
+    return {
+      type: SyncIssueType.ROLE_ABOVE_BOT,
+      message: "the role is above the bot's highest role and cannot be applied.",
+    };
+  }
+  if (!liveGuild.botCanManageRoles) {
+    return {
+      type: SyncIssueType.BOT_MISSING_PERMISSION,
+      message: 'the bot is missing Manage Roles in that guild.',
+    };
+  }
+  return null;
+}
+
 /**
- * The six-hourly reconciliation of every active member.
+ * The six-hourly reconciliation of every member of every approved guild.
  *
  * It creates a real `SyncJob` (so it is visible in `/resync status` and the audit trail
  * like any other job) and runs it through the same runner, which means it inherits the
  * threshold guard, the locks and the loop protection.
+ *
+ * Expired grants are swept first so that the reconciliation which follows already sees
+ * the correct desired state and takes the roles off in the same pass.
  */
 export async function runScheduledReconciliation({ gateway, prisma = getPrisma(), dryRun }) {
   const ctx = systemContext({ scheduled: true, label: 'scheduled-reconciliation' });
+
+  await expireGrants(ctx).catch((error) => {
+    log.error({ err: serializeError(error) }, 'grant expiry sweep failed');
+  });
 
   const job = await createSyncJob(prisma, ctx, {
     type: SyncJobType.SCHEDULED_RECONCILIATION,
@@ -312,8 +318,7 @@ export async function runScheduledReconciliation({ gateway, prisma = getPrisma()
   });
 
   try {
-    const finished = await runSyncJob({ jobId: job.id, gateway, prisma });
-    return finished;
+    return await runSyncJob({ jobId: job.id, gateway, prisma });
   } catch (error) {
     log.error({ err: serializeError(error), jobId: job.id }, 'scheduled reconciliation failed');
     throw error;

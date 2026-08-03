@@ -16,7 +16,7 @@ import {
   ValidationError,
   getCapability,
 } from '@frm/shared';
-import { assertCanGrant, assertCanRevoke, authorize } from '@frm/authorization';
+import { assertCanGrant, assertCanRevoke } from '@frm/authorization';
 import {
   grantPermissionSchema,
   listPermissionsSchema,
@@ -24,33 +24,18 @@ import {
   revokePermissionSchema,
 } from '@frm/validation';
 import { recordAudit } from './audit-service.js';
-import { resolveUser } from './resolve.js';
+import { authorizeAnyScope, resolveUser } from './resolve.js';
 
 const log = createLogger('core.permission');
 
-/** Verifies that a scope id refers to a real department, guild or subdivision. */
+/** Verifies that a scope id refers to a real approved guild. */
 async function assertScopeExists(prisma, scopeType, scopeId) {
-  switch (scopeType) {
-    case PermissionScopeType.GLOBAL:
-      return;
-    case PermissionScopeType.DEPARTMENT: {
-      const row = await prisma.department.findFirst({ where: { id: scopeId, ...notDeleted } });
-      if (!row) throw new NotFoundError('Department', scopeId);
-      return;
-    }
-    case PermissionScopeType.GUILD: {
-      const row = await prisma.approvedGuild.findFirst({ where: { id: scopeId, ...notDeleted } });
-      if (!row) throw new NotFoundError('Guild', scopeId);
-      return;
-    }
-    case PermissionScopeType.SUBDIVISION: {
-      const row = await prisma.subdivision.findFirst({ where: { id: scopeId, ...notDeleted } });
-      if (!row) throw new NotFoundError('Subdivision', scopeId);
-      return;
-    }
-    default:
-      throw new ValidationError(`Unknown scope type: ${scopeType}`);
+  if (scopeType === PermissionScopeType.GLOBAL) return;
+  if (scopeType !== PermissionScopeType.GUILD) {
+    throw new ValidationError(`Unknown scope type: ${scopeType}`);
   }
+  const row = await prisma.approvedGuild.findFirst({ where: { id: scopeId, ...notDeleted } });
+  if (!row) throw new NotFoundError('Guild', scopeId);
 }
 
 /** `/permissions grant`. */
@@ -75,7 +60,6 @@ export async function grantPermission(ctx, input) {
     capability: data.capability,
     scopeType: data.scopeType,
     scopeId,
-    maxRankOrder: data.maxRankOrder,
     maxPermissionLevel: data.maxPermissionLevel,
     targetUser: { id: targetUser.id, permissionLevel: targetUser.permissionLevel },
   });
@@ -103,7 +87,6 @@ export async function grantPermission(ctx, input) {
             revokedById: null,
             grantedAt: new Date(),
             grantedById: ctx.actor?.user?.id ?? null,
-            maxRankOrder: data.maxRankOrder ?? null,
             maxPermissionLevel: data.maxPermissionLevel ?? null,
             expiresAt: data.expiresAt ?? null,
             reason: data.reason,
@@ -115,7 +98,6 @@ export async function grantPermission(ctx, input) {
             capabilityKey: data.capability,
             scopeType: data.scopeType,
             scopeId,
-            maxRankOrder: data.maxRankOrder ?? null,
             maxPermissionLevel: data.maxPermissionLevel ?? null,
             expiresAt: data.expiresAt ?? null,
             grantedById: ctx.actor?.user?.id ?? null,
@@ -128,13 +110,12 @@ export async function grantPermission(ctx, input) {
       action: AuditAction.PERMISSION_GRANTED,
       targetUserId: targetUser.id,
       targetDiscordId: targetUser.primaryDiscordId,
-      departmentId: data.scopeType === PermissionScopeType.DEPARTMENT ? scopeId : null,
+      approvedGuildId: data.scopeType === PermissionScopeType.GUILD ? scopeId : null,
       reason: data.reason,
       newState: {
         capability: data.capability,
         scopeType: data.scopeType,
         scopeId,
-        maxRankOrder: data.maxRankOrder ?? null,
         maxPermissionLevel: data.maxPermissionLevel ?? null,
       },
     });
@@ -180,8 +161,8 @@ export async function revokePermission(ctx, input) {
       action: AuditAction.PERMISSION_REVOKED,
       targetUserId: assignment.userId,
       targetDiscordId: assignment.user.primaryDiscordId,
-      departmentId:
-        assignment.scopeType === PermissionScopeType.DEPARTMENT ? assignment.scopeId : null,
+      approvedGuildId:
+        assignment.scopeType === PermissionScopeType.GUILD ? assignment.scopeId : null,
       reason: data.reason,
       previousState: {
         capability: assignment.capabilityKey,
@@ -203,9 +184,7 @@ export async function listPermissions(ctx, input = {}) {
   const target =
     query.userId || query.discordUserId ? await resolveUser(ctx, query, { required: true }) : null;
 
-  authorize(ctx.actor, {
-    capability: 'permission.view',
-    scope: {},
+  authorizeAnyScope(ctx, 'permission.view', {
     target: target ? { userId: target.id } : {},
     allowSelf: true,
   });
@@ -237,42 +216,18 @@ export async function listPermissions(ctx, input = {}) {
 }
 
 async function decorateScopes(prisma, assignments) {
-  const departmentIds = assignments
-    .filter((a) => a.scopeType === PermissionScopeType.DEPARTMENT)
-    .map((a) => a.scopeId);
   const guildIds = assignments
     .filter((a) => a.scopeType === PermissionScopeType.GUILD)
     .map((a) => a.scopeId);
-  const subdivisionIds = assignments
-    .filter((a) => a.scopeType === PermissionScopeType.SUBDIVISION)
-    .map((a) => a.scopeId);
 
-  const [departments, guilds, subdivisions] = await Promise.all([
-    departmentIds.length
-      ? prisma.department.findMany({
-          where: { id: { in: departmentIds } },
-          select: { id: true, abbreviation: true, name: true },
-        })
-      : [],
-    guildIds.length
-      ? prisma.approvedGuild.findMany({
-          where: { id: { in: guildIds } },
-          select: { id: true, name: true },
-        })
-      : [],
-    subdivisionIds.length
-      ? prisma.subdivision.findMany({
-          where: { id: { in: subdivisionIds } },
-          select: { id: true, name: true },
-        })
-      : [],
-  ]);
+  const guilds = guildIds.length
+    ? await prisma.approvedGuild.findMany({
+        where: { id: { in: guildIds } },
+        select: { id: true, name: true },
+      })
+    : [];
 
-  const names = new Map([
-    ...departments.map((row) => [row.id, `${row.abbreviation} (department)`]),
-    ...guilds.map((row) => [row.id, `${row.name} (guild)`]),
-    ...subdivisions.map((row) => [row.id, `${row.name} (subdivision)`]),
-  ]);
+  const names = new Map(guilds.map((row) => [row.id, `${row.name} (guild)`]));
 
   return assignments.map((assignment) => ({
     ...assignment,
@@ -285,7 +240,7 @@ async function decorateScopes(prisma, assignments) {
 
 /** The capability catalogue, for building select menus and dashboard forms. */
 export async function listCapabilities(ctx) {
-  authorize(ctx.actor, { capability: 'permission.view', scope: {}, allowSelf: true });
+  authorizeAnyScope(ctx, 'permission.view', { allowSelf: true });
   const prisma = ctx.prisma ?? getPrisma();
   return prisma.permissionCapability.findMany({ orderBy: [{ category: 'asc' }, { key: 'asc' }] });
 }

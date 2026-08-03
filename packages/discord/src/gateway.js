@@ -114,6 +114,34 @@ export class DiscordJsRoleGateway {
   }
 
   /**
+   * Every member of a guild.
+   *
+   * Used by guild-wide and global resyncs, which have to consider everybody who might
+   * hold a mapped role - not just members with a platform account. This is a heavy call
+   * on a large guild (it pages the whole member list over the gateway), so it is only
+   * ever made by a queued job, never inside an interaction handler.
+   *
+   * @param {string} discordGuildId
+   * @returns {Promise<MemberSnapshot[]>}
+   */
+  async listMembers(discordGuildId) {
+    const guild = await this.#fetchGuild(discordGuildId);
+    if (!guild) return [];
+
+    const members = await guild.members.fetch().catch((error) => {
+      log.warn({ discordGuildId, err: serializeError(error) }, 'could not list guild members');
+      return null;
+    });
+    if (!members) return [];
+
+    return [...members.values()].map((member) => ({
+      id: member.id,
+      displayName: member.displayName ?? member.user?.username ?? member.id,
+      roleIds: [...member.roles.cache.keys()].filter((roleId) => roleId !== guild.id),
+    }));
+  }
+
+  /**
    * @param {string} discordGuildId
    * @param {string} discordUserId
    * @param {string} discordRoleId
@@ -216,6 +244,9 @@ export class ReadOnlyGatewayDecorator {
   }
   getMember(...args) {
     return this.inner.getMember(...args);
+  }
+  listMembers(...args) {
+    return this.inner.listMembers(...args);
   }
   listGuilds(...args) {
     return this.inner.listGuilds(...args);

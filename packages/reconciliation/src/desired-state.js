@@ -2,17 +2,17 @@
  * Desired-state computation.
  *
  * Pure: no database, no Discord, no clock beyond what the caller passes in. Given a
- * member's roster data and the current Discord state, it answers two questions for
- * every approved guild:
+ * member's grants and the current Discord state, it answers two questions for every
+ * approved guild:
  *
  *   1. which roles should this member have?           (`desired`)
  *   2. which roles is the platform allowed to remove?  (`controlled`)
  *
  * The second question is the important one. A role is only ever controlled when the
- * platform can actually compute its correct value - from roster data, from a manual
- * grant, or from an enabled mapping that is authoritative for it. Everything else is
- * the member's own business and is never touched, which is what stops the engine from
- * stripping community, cosmetic or notification roles.
+ * platform can actually compute its correct value — from an explicit manual grant, or
+ * from an enabled mapping that is authoritative for it. Everything else is the member's
+ * own business and is never touched, which is what stops the engine from stripping
+ * community, cosmetic or notification roles.
  *
  * ## Authority rules
  *
@@ -20,7 +20,6 @@
  * |-----------|-----------------|--------------------------------------------------|
  * | ONE_WAY   | SOURCE_DISCORD  | target mirrors the source role                   |
  * | ONE_WAY   | TARGET_DISCORD  | source mirrors the target role                   |
- * | ONE_WAY   | ROSTER          | target mirrors the roster-derived source value   |
  * | TWO_WAY   | SOURCE_DISCORD  | source wins; target is corrected to match        |
  * | TWO_WAY   | TARGET_DISCORD  | target wins; source is corrected to match        |
  * | TWO_WAY   | MANUAL / SYSTEM | union for adds; reconciliation never removes     |
@@ -30,14 +29,7 @@
  * on every run. Under union, adds converge and removals propagate through the event
  * handler instead, which knows which side actually changed.
  */
-import {
-  ACTIVE_MEMBERSHIP_STATUSES,
-  AuthoritySource,
-  MappingDirection,
-  MembershipStatus,
-  ROSTER_DRIVEN_PURPOSES,
-  RolePurpose,
-} from '@frm/shared';
+import { AuthoritySource, MappingDirection, RolePurpose } from '@frm/shared';
 
 /** How many passes the mapping fixpoint is allowed before we give up and warn. */
 const MAX_MAPPING_PASSES = 10;
@@ -62,14 +54,8 @@ const MAX_MAPPING_PASSES = 10;
  * @param {Map<string, Set<string>>} actualByGuild guildDiscordId -> current role ids
  * @param {object} [options]
  * @param {boolean} [options.mappingOnly]
- *   Evaluate mappings only, and treat no roster-driven role as removable.
- *
- *   This is the mode used for a Discord account that has no platform member record. We
- *   have no roster data for that person, so we cannot compute the correct value of
- *   their rank or membership roles - and the engine's central rule is that it only
- *   removes roles whose correct value it can compute. Stripping department roles from
- *   somebody simply because they are unlinked would be a mass-removal bug waiting to
- *   happen; the scheduled sweep reports them as an issue for a human instead.
+ *   Evaluate mappings only, ignoring manual grants. Used for a Discord account with no
+ *   platform member record, which by definition cannot hold a grant.
  * @returns {DesiredState}
  */
 export function computeDesiredState(context, actualByGuild = new Map(), options = {}) {
@@ -86,166 +72,12 @@ export function computeDesiredState(context, actualByGuild = new Map(), options 
   const rolesByGuild = groupBy(context.managedRoles, (role) => role.discordGuildId);
 
   if (!options.mappingOnly) {
-    // --- 1. roster-driven roles --------------------------------------------
-    applyRosterRoles({ context, desired, controlled, rolesByGuild, warnings });
-
-    // --- 2. manual grants --------------------------------------------------
     applyManualGrants({ context, desired, controlled, rolesByGuild });
   }
 
-  // --- 3. mappings ---------------------------------------------------------
   applyMappings({ context, desired, controlled, actualByGuild, conflicts, warnings });
 
   return { desired, controlled, conflicts, warnings };
-}
-
-// ---------------------------------------------------------------------------
-// Roster
-// ---------------------------------------------------------------------------
-
-function applyRosterRoles({ context, desired, controlled, rolesByGuild, warnings }) {
-  const activeMemberships = context.memberships.filter((membership) =>
-    ACTIVE_MEMBERSHIP_STATUSES.includes(membership.status),
-  );
-  const activeDepartmentIds = new Set(activeMemberships.map((m) => m.departmentId));
-  const membershipByDepartment = new Map(activeMemberships.map((m) => [m.departmentId, m]));
-  const certificationIds = new Set(context.certificationIds ?? []);
-  const subdivisionIds = new Set(context.subdivisionIds ?? []);
-
-  for (const guild of context.guilds) {
-    const guildRoles = rolesByGuild.get(guild.discordGuildId) ?? [];
-
-    for (const role of guildRoles) {
-      if (!role.managedByPlatform) continue;
-      if (!ROSTER_DRIVEN_PURPOSES.includes(role.purpose)) continue;
-
-      // Every roster-driven managed role is controlled: the roster always knows
-      // whether the member should have it, including when the answer is "no".
-      controlled.get(guild.discordGuildId).add(role.discordRoleId);
-
-      const membership = role.departmentId ? membershipByDepartment.get(role.departmentId) : null;
-      const wanted = isRosterRoleWanted({
-        role,
-        membership,
-        activeDepartmentIds,
-        certificationIds,
-        subdivisionIds,
-      });
-
-      if (wanted) {
-        setDesired(desired, guild.discordGuildId, role.discordRoleId, {
-          reason: wanted.reason,
-          source: AuthoritySource.ROSTER,
-          priority: Number.MAX_SAFE_INTEGER, // roster always beats a mapping
-          managedRoleId: role.id,
-          mappingId: null,
-        });
-      }
-    }
-  }
-
-  // A member who belongs to a department that has no managed roles at all is almost
-  // certainly a misconfiguration; surface it rather than silently doing nothing.
-  for (const membership of activeMemberships) {
-    const hasAnyRole = context.managedRoles.some(
-      (role) => role.departmentId === membership.departmentId && role.managedByPlatform,
-    );
-    if (!hasAnyRole) {
-      warnings.push({
-        type: 'DEPARTMENT_HAS_NO_MANAGED_ROLES',
-        message: `Department ${membership.departmentKey ?? membership.departmentId} has no managed Discord roles configured.`,
-        details: { departmentId: membership.departmentId },
-      });
-    }
-  }
-}
-
-/**
- * Decides whether a single roster-driven role is wanted, honouring the department's
- * LOA and suspension policy.
- *
- * @returns {{reason: string}|null}
- */
-function isRosterRoleWanted({
-  role,
-  membership,
-  activeDepartmentIds,
-  certificationIds,
-  subdivisionIds,
-}) {
-  switch (role.purpose) {
-    case RolePurpose.DEPARTMENT_MEMBERSHIP: {
-      if (!membership) return null;
-      if (suppressesMembershipRoles(membership)) return null;
-      return {
-        reason: `department membership: ${membership.departmentName ?? membership.departmentId}`,
-      };
-    }
-
-    case RolePurpose.RANK: {
-      if (!membership) return null;
-      if (membership.rankId !== role.rankId) return null;
-      if (suppressesRankRoles(membership)) return null;
-      return { reason: `rank: ${membership.rankName ?? role.name}` };
-    }
-
-    case RolePurpose.SUPERVISOR: {
-      if (!membership?.rank?.isSupervisor) return null;
-      if (suppressesRankRoles(membership)) return null;
-      return { reason: `supervisor rank: ${membership.rankName ?? ''}`.trim() };
-    }
-
-    case RolePurpose.COMMAND: {
-      if (!membership?.rank?.isCommand) return null;
-      if (suppressesRankRoles(membership)) return null;
-      return { reason: `command rank: ${membership.rankName ?? ''}`.trim() };
-    }
-
-    case RolePurpose.STATUS_LOA: {
-      if (!membership || membership.status !== MembershipStatus.LOA) return null;
-      return { reason: 'status: leave of absence' };
-    }
-
-    case RolePurpose.STATUS_SUSPENDED: {
-      if (!membership || membership.status !== MembershipStatus.SUSPENDED) return null;
-      return { reason: 'status: suspended' };
-    }
-
-    case RolePurpose.CERTIFICATION: {
-      if (!role.certificationId || !certificationIds.has(role.certificationId)) return null;
-      // A department-scoped certification role requires membership of that department.
-      if (role.departmentId && !activeDepartmentIds.has(role.departmentId)) return null;
-      if (membership && suppressesMembershipRoles(membership)) return null;
-      return { reason: `certification: ${role.name}` };
-    }
-
-    case RolePurpose.SUBDIVISION: {
-      if (!role.subdivisionId || !subdivisionIds.has(role.subdivisionId)) return null;
-      if (role.departmentId && !activeDepartmentIds.has(role.departmentId)) return null;
-      if (membership && suppressesMembershipRoles(membership)) return null;
-      return { reason: `subdivision: ${role.name}` };
-    }
-
-    default:
-      return null;
-  }
-}
-
-function suppressesRankRoles(membership) {
-  if (membership.status === MembershipStatus.LOA) {
-    return Boolean(membership.department?.removeRankRolesOnLoa);
-  }
-  if (membership.status === MembershipStatus.SUSPENDED) {
-    return membership.department?.removeRankRolesOnSuspension !== false;
-  }
-  return false;
-}
-
-function suppressesMembershipRoles(membership) {
-  if (membership.status === MembershipStatus.SUSPENDED) {
-    return Boolean(membership.department?.removeMembershipRolesOnSuspension);
-  }
-  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +100,7 @@ function applyManualGrants({ context, desired, controlled, rolesByGuild }) {
         setDesired(desired, guild.discordGuildId, role.discordRoleId, {
           reason: `manual grant: ${role.name}`,
           source: AuthoritySource.MANUAL,
-          priority: Number.MAX_SAFE_INTEGER - 1,
+          priority: Number.MAX_SAFE_INTEGER,
           managedRoleId: role.id,
           mappingId: null,
         });
@@ -359,7 +191,6 @@ function edgesFor(mapping) {
       return [{ ...backward, authoritative: true }];
 
     case AuthoritySource.SOURCE_DISCORD:
-    case AuthoritySource.ROSTER:
     case AuthoritySource.SYSTEM:
       return [{ ...forward, authoritative: true }];
 
@@ -406,16 +237,16 @@ function applyMappingEdge({ mapping, edge, desired, controlled, actualByGuild, c
   }
 
   // The source does not have the role. Only an authoritative edge with removal enabled
-  // may un-desire it, and roster decisions always win.
+  // may un-desire it, and manual grants always win.
   if (!edge.authoritative || !mapping.syncRemove) return changed;
 
   if (existing) {
-    if (existing.source === AuthoritySource.ROSTER || existing.source === AuthoritySource.MANUAL) {
+    if (existing.source === AuthoritySource.MANUAL && existing.mappingId === null) {
       conflicts.push({
-        type: 'MAPPING_OVERRIDDEN_BY_ROSTER',
+        type: 'MAPPING_OVERRIDDEN_BY_GRANT',
         message:
-          `Mapping "${mapping.name}" would remove a role that roster data requires. ` +
-          'Roster data wins; the mapping had no effect on this role.',
+          `Mapping "${mapping.name}" would remove a role that an active manual grant requires. ` +
+          'The grant wins; the mapping had no effect on this role.',
         details: {
           mappingId: mapping.id,
           discordGuildId: edge.toGuild,

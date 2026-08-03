@@ -6,14 +6,7 @@
  * one of them is parsed here before a service ever sees it.
  */
 import { z } from 'zod';
-import {
-  CALLSIGN_PATTERN,
-  PAGINATION,
-  SLUG_PATTERN,
-  SNOWFLAKE_PATTERN,
-  ValidationError,
-  extractSnowflake,
-} from '@frm/shared';
+import { PAGINATION, SNOWFLAKE_PATTERN, ValidationError, extractSnowflake } from '@frm/shared';
 
 /** A Discord snowflake, accepted either raw or as a `<@123>` style mention. */
 export const snowflake = z
@@ -31,19 +24,6 @@ export const optionalSnowflake = snowflake.optional();
 export const uuid = z.string().trim().uuid('Must be a valid identifier');
 
 export const optionalUuid = uuid.optional();
-
-/** URL-safe key used for departments, certifications and subdivisions. */
-export const slug = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .regex(SLUG_PATTERN, 'Must be 2-32 lowercase letters, numbers or dashes');
-
-export const callsign = z
-  .string()
-  .trim()
-  .toUpperCase()
-  .regex(CALLSIGN_PATTERN, 'Callsigns are 2-16 letters, numbers or dashes');
 
 /** Free text reason attached to auditable actions. */
 export const reason = z

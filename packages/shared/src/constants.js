@@ -36,12 +36,6 @@ export const DISCORD_LIMITS = Object.freeze({
   MESSAGE_CONTENT: 2000,
 });
 
-/** Callsign format: 2-16 characters, letters, digits and dashes. */
-export const CALLSIGN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{1,15}$/;
-
-/** Slug format used for department, certification and subdivision keys. */
-export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,31}$/;
-
 /** How long an interactive confirmation stays valid. */
 export const CONFIRMATION_TTL_MS = 2 * 60 * 1000;
 

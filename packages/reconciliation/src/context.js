@@ -4,13 +4,12 @@
  * Split into two halves on purpose:
  *
  *   - `loadPlatformContext` reads guilds, managed roles and mappings. This is identical
- *     for every member, so a department resync loads it once instead of once per person.
- *   - `loadMemberRoster` reads one member's roster facts.
+ *     for every member, so a guild resync loads it once instead of once per person.
+ *   - `loadMemberGrants` reads one member's active manual grants.
  *
- * On a 400-member department that is the difference between 3 queries and 1200.
+ * On a 400-member guild that is the difference between 3 queries and 800.
  */
 import { getPrisma, notDeleted } from '@frm/database';
-import { MembershipStatus } from '@frm/shared';
 
 /**
  * Guilds, managed roles and enabled mappings, shaped for the pure engine.
@@ -19,7 +18,7 @@ import { MembershipStatus } from '@frm/shared';
 export async function loadPlatformContext(prisma = getPrisma()) {
   const guilds = await prisma.approvedGuild.findMany({
     where: { ...notDeleted, enabled: true, syncEnabled: true },
-    select: { id: true, discordGuildId: true, name: true, type: true, departmentId: true },
+    select: { id: true, discordGuildId: true, name: true, type: true },
   });
 
   const guildIds = guilds.map((guild) => guild.id);
@@ -33,10 +32,6 @@ export async function loadPlatformContext(prisma = getPrisma()) {
       discordRoleId: true,
       name: true,
       purpose: true,
-      departmentId: true,
-      rankId: true,
-      certificationId: true,
-      subdivisionId: true,
       protectionLevel: true,
       managedByPlatform: true,
     },
@@ -81,16 +76,15 @@ export async function loadPlatformContext(prisma = getPrisma()) {
 }
 
 /**
- * One member's roster facts: memberships, current certifications, subdivisions and
- * manual grants. Expired and revoked records are filtered out here so the engine never
- * has to reason about time.
+ * One member's active manual grants. Expired and revoked grants are filtered out here
+ * so the engine never has to reason about time.
  *
  * @param {string} userId
  * @param {object} [options]
  * @param {import('@prisma/client').PrismaClient} [options.prisma]
  * @param {Date} [options.now]
  */
-export async function loadMemberRoster(userId, { prisma = getPrisma(), now = new Date() } = {}) {
+export async function loadMemberGrants(userId, { prisma = getPrisma(), now = new Date() } = {}) {
   const user = await prisma.user.findFirst({
     where: { id: userId, ...notDeleted },
     select: {
@@ -108,46 +102,6 @@ export async function loadMemberRoster(userId, { prisma = getPrisma(), now = new
 
   const discordUserId = user.primaryDiscordId ?? user.discordIdentities[0]?.discordUserId ?? null;
 
-  const memberships = await prisma.departmentMembership.findMany({
-    where: {
-      userId,
-      ...notDeleted,
-      status: { not: MembershipStatus.TERMINATED },
-    },
-    select: {
-      id: true,
-      departmentId: true,
-      rankId: true,
-      status: true,
-      callsign: true,
-      department: {
-        select: {
-          id: true,
-          key: true,
-          name: true,
-          removeRankRolesOnLoa: true,
-          removeRankRolesOnSuspension: true,
-          removeMembershipRolesOnSuspension: true,
-        },
-      },
-      rank: { select: { id: true, name: true, order: true, isSupervisor: true, isCommand: true } },
-    },
-  });
-
-  const certifications = await prisma.memberCertification.findMany({
-    where: {
-      userId,
-      revokedAt: null,
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-    },
-    select: { certificationId: true },
-  });
-
-  const subdivisions = await prisma.memberSubdivision.findMany({
-    where: { userId, leftAt: null },
-    select: { subdivisionId: true },
-  });
-
   const manualGrants = await prisma.manualRoleGrant.findMany({
     where: {
       userId,
@@ -159,21 +113,6 @@ export async function loadMemberRoster(userId, { prisma = getPrisma(), now = new
 
   return {
     member: { id: user.id, displayName: user.displayName, discordUserId },
-    memberships: memberships.map((membership) => ({
-      id: membership.id,
-      departmentId: membership.departmentId,
-      departmentKey: membership.department.key,
-      departmentName: membership.department.name,
-      rankId: membership.rankId,
-      rankName: membership.rank.name,
-      rankOrder: membership.rank.order,
-      status: membership.status,
-      callsign: membership.callsign,
-      rank: membership.rank,
-      department: membership.department,
-    })),
-    certificationIds: certifications.map((row) => row.certificationId),
-    subdivisionIds: subdivisions.map((row) => row.subdivisionId),
     manualGrantManagedRoleIds: manualGrants.map((row) => row.managedRoleId),
   };
 }
@@ -181,18 +120,15 @@ export async function loadMemberRoster(userId, { prisma = getPrisma(), now = new
 /**
  * Combines platform and member data into the context the pure engine consumes.
  * @param {Awaited<ReturnType<typeof loadPlatformContext>>} platform
- * @param {Awaited<ReturnType<typeof loadMemberRoster>>} roster
+ * @param {Awaited<ReturnType<typeof loadMemberGrants>>} member
  */
-export function buildReconciliationContext(platform, roster) {
+export function buildReconciliationContext(platform, member) {
   return {
-    member: roster.member,
+    member: member.member,
     guilds: platform.guilds,
     managedRoles: platform.managedRoles,
     mappings: platform.mappings,
-    memberships: roster.memberships,
-    certificationIds: roster.certificationIds,
-    subdivisionIds: roster.subdivisionIds,
-    manualGrantManagedRoleIds: roster.manualGrantManagedRoleIds,
+    manualGrantManagedRoleIds: member.manualGrantManagedRoleIds ?? [],
   };
 }
 

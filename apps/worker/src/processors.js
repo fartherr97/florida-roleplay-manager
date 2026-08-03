@@ -6,10 +6,10 @@
  */
 import { createLogger, serializeError } from '@frm/logging';
 import {
-  detectRosterDrift,
   runMappingValidation,
   runScheduledReconciliation,
   runSyncJob,
+  validateManagedRoles,
 } from '@frm/core';
 import { getPrisma } from '@frm/database';
 import { JobName } from '@frm/queue';
@@ -72,8 +72,10 @@ export function createMaintenanceProcessor({ gateway }) {
     switch (job.name) {
       case JobName.MAPPING_VALIDATION: {
         const report = await runMappingValidation({ gateway, prisma });
-        await detectRosterDrift({ gateway, prisma }).catch((error) => {
-          log.error({ err: serializeError(error) }, 'roster drift check failed');
+        // A managed role that has been deleted or moved above the bot is reported here
+        // rather than during a sync, where it would surface one failed action at a time.
+        await validateManagedRoles({ gateway, prisma }).catch((error) => {
+          log.error({ err: serializeError(error) }, 'managed role validation failed');
         });
         return report;
       }

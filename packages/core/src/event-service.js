@@ -12,8 +12,8 @@
  *   2. **Does it matter?** If the role is neither platform-managed nor part of an
  *      enabled mapping, ignore it. Members' own roles are their own business.
  *   3. **Then reconcile.** Queue a resync for that member. Reconciliation is idempotent
- *      and computes the whole correct state, so a manual change that contradicts roster
- *      data gets corrected on the next pass rather than being propagated.
+ *      and computes the whole correct state, so a manual change that contradicts a
+ *      mapping gets corrected on the next pass rather than being propagated.
  */
 import { getPrisma, notDeleted } from '@frm/database';
 import { createLogger, serializeError } from '@frm/logging';
@@ -123,9 +123,9 @@ export async function handleMemberRoleChange({
 
   const job = await prisma.$transaction(async (tx) => {
     const created = await createSyncJob(tx, ctxWithActor, {
-      // A linked member gets a full reconciliation (roster + mappings). An unlinked
-      // Discord account gets mapping-only propagation, because the engine has no roster
-      // data with which to compute the rest of their roles.
+      // A linked member gets a full reconciliation (mappings + their manual grants). An
+      // unlinked Discord account gets mapping-only propagation, since it cannot hold a
+      // grant in the first place.
       type: identity ? SyncJobType.MEMBER_RESYNC : SyncJobType.MAPPING_PROPAGATION,
       targetUserId: identity?.userId ?? null,
       approvedGuildId: guild.id,
@@ -168,7 +168,7 @@ export async function handleMemberRoleChange({
 /**
  * Which of these roles does the platform care about?
  *
- * A role matters when it is a managed role (roster/manual driven) or when it appears on
+ * A role matters when it is a managed role or when it appears on
  * either side of an enabled mapping.
  */
 async function filterRelevantRoles(prisma, approvedGuildId, roleIds) {
@@ -230,9 +230,12 @@ export async function handleMemberJoin({ discordGuildId, discordUserId, prisma =
 }
 
 /**
- * A member left an approved guild. Nothing is changed in the database: leaving a Discord
- * server is not a resignation from the department, and quietly terminating them would
- * destroy roster data on a misclick.
+ * A member left an approved guild.
+ *
+ * Nothing is changed in the database. Leaving a Discord server is not a revocation of
+ * anything, and quietly revoking somebody's grants on a misclick would be far worse than
+ * a stale record. If they still hold a grant for a role in *this* guild, that is worth
+ * telling an administrator about, because the grant can no longer be applied.
  */
 export async function handleMemberLeave({ discordGuildId, discordUserId, prisma = getPrisma() }) {
   const guild = await findApprovedGuildBySnowflake(discordGuildId, prisma);
@@ -244,16 +247,16 @@ export async function handleMemberLeave({ discordGuildId, discordUserId, prisma 
   });
   if (!identity) return { recorded: false };
 
-  const activeMemberships = await prisma.departmentMembership.count({
+  const activeGrants = await prisma.manualRoleGrant.count({
     where: {
       userId: identity.userId,
-      ...notDeleted,
-      status: { notIn: ['TERMINATED'] },
-      ...(guild.departmentId ? { departmentId: guild.departmentId } : {}),
+      revokedAt: null,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      managedRole: { approvedGuildId: guild.id },
     },
   });
 
-  if (activeMemberships > 0) {
+  if (activeGrants > 0) {
     await prisma.syncIssue.create({
       data: {
         type: SyncIssueType.MEMBER_NOT_IN_GUILD,
@@ -263,13 +266,13 @@ export async function handleMemberLeave({ discordGuildId, discordUserId, prisma 
         userId: identity.userId,
         discordUserId,
         message:
-          'An active roster member left this Discord server. Their roster record is unchanged; ' +
-          'remove them from the roster if they have actually resigned.',
+          `A member holding ${activeGrants} active role grant(s) for this server has left it. ` +
+          'The grants are unchanged; revoke them if the access is no longer intended.',
       },
     });
   }
 
-  return { recorded: true, activeMemberships };
+  return { recorded: true, activeGrants };
 }
 
 /**

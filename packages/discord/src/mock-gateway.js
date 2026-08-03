@@ -122,6 +122,14 @@ export class MockRoleGateway {
     return [...this.guilds.values()].map((guild) => ({ id: guild.id, name: guild.name }));
   }
 
+  async listMembers(discordGuildId) {
+    return [...(this.members.get(discordGuildId)?.values() ?? [])].map((member) => ({
+      id: member.id,
+      displayName: member.displayName,
+      roleIds: [...member.roleIds],
+    }));
+  }
+
   async addRole(discordGuildId, discordUserId, discordRoleId, reason) {
     this.calls.push({ action: 'ADD_ROLE', discordGuildId, discordUserId, discordRoleId, reason });
     this.#maybeFail(discordGuildId, discordUserId, discordRoleId);

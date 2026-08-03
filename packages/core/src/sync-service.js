@@ -2,7 +2,7 @@
  * Synchronization job lifecycle.
  *
  * Creating a job is a database write; running it is the worker's business. The split
- * matters: a roster change commits its `SyncJob` row inside the same transaction as the
+ * matters: a grant change commits its `SyncJob` row inside the same transaction as the
  * change itself, and only enqueues onto BullMQ *after* the commit succeeds. A queue is
  * not transactional, so a job enqueued inside the transaction could be picked up before
  * (or instead of) the data it describes.
@@ -10,7 +10,7 @@
  * If the enqueue fails, the job row still exists and a `SyncIssue` records the failure,
  * so nothing is silently lost and scheduled reconciliation will still repair the state.
  */
-import { getPrisma, notDeleted, toPage, toSkipTake } from '@frm/database';
+import { getPrisma, toPage, toSkipTake } from '@frm/database';
 import { createLogger, serializeError } from '@frm/logging';
 import {
   ActionSource,
@@ -24,20 +24,19 @@ import {
   SyncJobType,
   getEnv,
 } from '@frm/shared';
-import { authorize, departmentScopeFilter } from '@frm/authorization';
+import { authorize, guildScopeFilter } from '@frm/authorization';
 import { JOB_NAME_FOR_TYPE, enqueue } from '@frm/queue';
 import {
   parseOrThrow,
-  resyncDepartmentSchema,
+  resyncAllSchema,
   resyncGuildSchema,
   resyncMemberSchema,
-  resyncAllSchema,
   retryIssueSchema,
   syncIssueListSchema,
   syncJobListSchema,
 } from '@frm/validation';
 import { recordAudit } from './audit-service.js';
-import { resolveApprovedGuild, resolveDepartment, resolveUser } from './resolve.js';
+import { authorizeAnyScope, resolveApprovedGuild, resolveUser } from './resolve.js';
 
 const log = createLogger('core.sync');
 
@@ -61,7 +60,6 @@ export async function createSyncJob(client, ctx, params) {
       source: ctx.source ?? ActionSource.SYSTEM,
       initiatedById: ctx.actor?.user?.id ?? null,
       initiatedByDiscordId: ctx.actor?.discordUserId ?? null,
-      departmentId: params.departmentId ?? null,
       approvedGuildId: params.approvedGuildId ?? null,
       targetUserId: params.targetUserId ?? null,
       mappingId: params.mappingId ?? null,
@@ -76,7 +74,7 @@ export async function createSyncJob(client, ctx, params) {
 
 /**
  * Enqueues a previously created job. Never throws: a queue outage must not roll back a
- * roster change that has already committed, so the failure is recorded as an issue and
+ * change that has already committed, so the failure is recorded as an issue and
  * surfaced to administrators.
  *
  * @param {object} job the SyncJob row
@@ -135,7 +133,6 @@ export async function createAndEnqueue(ctx, params) {
       ctx,
       action: AuditAction.SYNC_JOB_CREATED,
       targetUserId: params.targetUserId ?? null,
-      departmentId: params.departmentId ?? null,
       approvedGuildId: params.approvedGuildId ?? null,
       syncJobId: created.id,
       reason: params.reason ?? null,
@@ -153,46 +150,16 @@ export async function createAndEnqueue(ctx, params) {
 // ---------------------------------------------------------------------------
 
 /**
- * Authorizes an action against every department the target member belongs to.
+ * `/resync member` and `POST /api/sync/member`.
  *
- * A member of two departments may be resynchronized by command staff of either one -
- * the change is to that member's whole role set, and refusing would make the command
- * useless for anybody with dual membership.
+ * A member's roles span every approved guild, so this is authorized with
+ * `authorizeMemberAction` rather than against one guild.
  */
-async function authorizeAgainstMemberScopes(ctx, capability, userId) {
-  const prisma = ctx.prisma ?? getPrisma();
-  const memberships = await prisma.departmentMembership.findMany({
-    where: { userId, ...notDeleted },
-    select: { departmentId: true },
-  });
-
-  if (memberships.length === 0) {
-    authorize(ctx.actor, { capability, scope: {}, allowSelf: true });
-    return;
-  }
-
-  let lastError = null;
-  for (const membership of memberships) {
-    try {
-      authorize(ctx.actor, {
-        capability,
-        scope: { departmentId: membership.departmentId },
-        allowSelf: true,
-      });
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError ?? new AuthorizationError(`You do not have ${capability} for this member.`);
-}
-
-/** `/resync member` and `POST /api/sync/member`. */
 export async function resyncMember(ctx, input) {
   const data = parseOrThrow(resyncMemberSchema, input);
   const user = await resolveUser(ctx, data);
 
-  await authorizeAgainstMemberScopes(ctx, 'sync.member', user.id);
+  authorizeAnyScope(ctx, 'sync.member', { allowSelf: true });
 
   return createAndEnqueue(ctx, {
     type: SyncJobType.MEMBER_RESYNC,
@@ -203,34 +170,12 @@ export async function resyncMember(ctx, input) {
   });
 }
 
-/** `/resync department`. */
-export async function resyncDepartment(ctx, input) {
-  const data = parseOrThrow(resyncDepartmentSchema, input);
-  const department = await resolveDepartment(ctx, data.departmentId);
-
-  authorize(ctx.actor, {
-    capability: 'sync.department',
-    scope: { departmentId: department.id },
-  });
-
-  return createAndEnqueue(ctx, {
-    type: SyncJobType.DEPARTMENT_RESYNC,
-    departmentId: department.id,
-    dryRun: data.dryRun,
-    reason: data.reason,
-    payload: { departmentId: department.id, includeInactive: data.includeInactive },
-  });
-}
-
 /** `/resync guild`. */
 export async function resyncGuild(ctx, input) {
   const data = parseOrThrow(resyncGuildSchema, input);
   const guild = await resolveApprovedGuild(ctx, data.guildId);
 
-  authorize(ctx.actor, {
-    capability: 'sync.guild',
-    scope: { guildId: guild.id, departmentId: guild.departmentId ?? undefined },
-  });
+  authorize(ctx.actor, { capability: 'sync.guild', scope: { guildId: guild.id } });
 
   if (!guild.enabled || !guild.syncEnabled) {
     throw new PreconditionError(`Synchronization is disabled for ${guild.name}.`);
@@ -255,21 +200,6 @@ export async function resyncAll(ctx, input) {
     dryRun: data.dryRun,
     reason: data.reason,
     payload: {},
-  });
-}
-
-/**
- * Queues the synchronization that follows a roster change. Called from inside roster
- * service transactions, so it takes the transaction client and defers enqueueing.
- */
-export async function createRosterChangeJob(tx, ctx, { userId, departmentId, reason }) {
-  return createSyncJob(tx, ctx, {
-    type: SyncJobType.ROSTER_CHANGE,
-    targetUserId: userId,
-    departmentId,
-    reason,
-    dryRun: false,
-    payload: { userId },
   });
 }
 
@@ -308,7 +238,6 @@ export async function getSyncJob(ctx, jobId, { includeActions = true, actionLimi
   const job = await prisma.syncJob.findUnique({
     where: { id: jobId },
     include: {
-      department: { select: { id: true, name: true } },
       guild: { select: { id: true, name: true } },
       issues: { where: { resolved: false }, take: 25 },
       actions: includeActions ? { take: actionLimit, orderBy: { createdAt: 'asc' } } : false,
@@ -326,19 +255,20 @@ export async function listSyncJobs(ctx, input) {
   const query = parseOrThrow(syncJobListSchema, input);
   const prisma = ctx.prisma ?? getPrisma();
 
-  const allowedDepartments = departmentScopeFilter(ctx.actor, 'sync.member');
+  authorizeAnyScope(ctx, 'sync.member', { allowSelf: true });
+
+  const allowedGuilds = guildScopeFilter(ctx.actor, 'sync.member');
   /** @type {object} */
   const where = {};
   if (query.status) where.status = query.status;
-  if (query.departmentId) where.departmentId = query.departmentId;
   if (query.guildId) where.approvedGuildId = query.guildId;
   if (query.userId) where.targetUserId = query.userId;
 
-  if (allowedDepartments !== null) {
-    if (allowedDepartments.length === 0) {
-      throw new AuthorizationError('You do not have synchronization access to any department.');
+  if (allowedGuilds !== null) {
+    if (allowedGuilds.length === 0) {
+      throw new AuthorizationError('You do not have synchronization access to any guild.');
     }
-    where.departmentId = { in: allowedDepartments };
+    where.approvedGuildId = { in: allowedGuilds };
   }
 
   const [items, total] = await Promise.all([
@@ -347,7 +277,6 @@ export async function listSyncJobs(ctx, input) {
       orderBy: { [query.sortBy]: query.sortDir },
       ...toSkipTake(query),
       include: {
-        department: { select: { id: true, name: true } },
         guild: { select: { id: true, name: true } },
         _count: { select: { actions: true, issues: true } },
       },
@@ -363,7 +292,7 @@ export async function listSyncIssues(ctx, input) {
   const query = parseOrThrow(syncIssueListSchema, input);
   const prisma = ctx.prisma ?? getPrisma();
 
-  authorize(ctx.actor, { capability: 'sync.issue.retry', scope: {} });
+  authorizeAnyScope(ctx, 'sync.issue.retry');
 
   /** @type {object} */
   const where = {};
@@ -411,11 +340,11 @@ export async function retrySyncIssue(ctx, input) {
   if (!userId) {
     throw new PreconditionError(
       'That issue is not tied to a specific member, so it cannot be retried individually. ' +
-        'Run a guild or department resync instead.',
+        'Run a guild-wide resync instead.',
     );
   }
 
-  await authorizeAgainstMemberScopes(ctx, 'sync.issue.retry', userId);
+  authorizeAnyScope(ctx, 'sync.issue.retry');
 
   const result = await createAndEnqueue(ctx, {
     type: SyncJobType.MEMBER_RESYNC,
@@ -439,7 +368,7 @@ export async function resolveSyncIssue(ctx, { issueId, reason }) {
   const issue = await prisma.syncIssue.findUnique({ where: { id: issueId } });
   if (!issue) throw new NotFoundError('Sync issue', issueId);
 
-  authorize(ctx.actor, { capability: 'sync.issue.retry', scope: {} });
+  authorizeAnyScope(ctx, 'sync.issue.retry');
 
   const updated = await prisma.$transaction(async (tx) => {
     const row = await tx.syncIssue.update({
@@ -489,21 +418,22 @@ export async function cancelSyncJob(ctx, jobId, reason) {
 }
 
 /**
- * Read authorization for a job: global sync holders see everything, department holders
- * see their own department's jobs, and a member may always see a job about themselves.
+ * Read authorization for a job: global sync holders see everything, guild-scoped holders
+ * see their own guild's jobs, and a member may always see a job about themselves.
  */
 function authorizeJobRead(ctx, job) {
   if (ctx.actor?.isSystem) return;
   if (job.targetUserId && job.targetUserId === ctx.actor?.user?.id) return;
 
-  authorize(ctx.actor, {
-    capability: 'sync.member',
-    scope: {
-      departmentId: job.departmentId ?? undefined,
-      guildId: job.approvedGuildId ?? undefined,
-    },
-    allowSelf: true,
-  });
+  if (job.approvedGuildId) {
+    authorize(ctx.actor, {
+      capability: 'sync.member',
+      scope: { guildId: job.approvedGuildId },
+      allowSelf: true,
+    });
+  } else {
+    authorizeAnyScope(ctx, 'sync.member', { allowSelf: true });
+  }
 }
 
 function sleep(ms) {

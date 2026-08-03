@@ -4,13 +4,17 @@
  * Ties the pieces together: read live Discord state, compute the desired state, diff
  * them, and return a plan. Planning never writes anything, which is what makes dry-run
  * and preview exactly the same code path as a real run.
+ *
+ * Everything is keyed on a Discord account, not on a platform member. Mappings apply to
+ * whoever holds the source role, whether or not they have ever signed in — a member
+ * record only adds manual grants on top.
  */
 import { createLogger } from '@frm/logging';
 import { computeDesiredState } from './desired-state.js';
 import { aggregatePlans, diffMemberState, summarizePlan } from './diff.js';
 import {
   buildReconciliationContext,
-  loadMemberRoster,
+  loadMemberGrants,
   loadPlatformContext,
   relevantGuilds,
 } from './context.js';
@@ -49,75 +53,31 @@ export async function readActualState(gateway, discordUserId, guilds) {
 }
 
 /**
- * Plans the reconciliation of a single member.
+ * Plans the reconciliation of one Discord account.
  *
- * @param {object} params
- * @param {object} params.gateway
- * @param {object} params.platform result of `loadPlatformContext`
- * @param {object} params.roster result of `loadMemberRoster`
- * @returns {Promise<{plan: object, context: object, actualByGuild: Map<string, Set<string>|null>}>}
- */
-export async function planMemberReconciliation({ gateway, platform, roster }) {
-  const context = buildReconciliationContext(platform, roster);
-  const guilds = relevantGuilds(context);
-  const { discordUserId } = context.member;
-
-  if (!discordUserId) {
-    return {
-      context,
-      actualByGuild: new Map(),
-      plan: {
-        actions: [],
-        conflicts: [],
-        warnings: [
-          {
-            type: 'MEMBER_NOT_LINKED',
-            message:
-              'This member has no linked Discord account, so no roles can be synchronized for them.',
-            details: { userId: context.member.id },
-          },
-        ],
-        guildsMissingMember: [],
-        rolesReviewed: 0,
-      },
-    };
-  }
-
-  const actualByGuild = await readActualState(gateway, discordUserId, guilds);
-  const desiredState = computeDesiredState(context, actualByGuild);
-  const plan = diffMemberState({ discordUserId, desiredState, actualByGuild, guilds });
-
-  return { plan, context, actualByGuild };
-}
-
-/**
- * Plans reconciliation for a Discord account with no platform member record.
- *
- * Only mappings are evaluated, and only mapping-controlled roles can be removed. This
- * is what lets a community interest role stay synchronized across guilds for people who
- * are not on any department roster, without the engine ever touching roles whose
- * correct value it cannot compute.
+ * `member` is optional: when supplied, the account's manual grants are included.
+ * Without it the plan is mapping-only, which is exactly right for a Discord user who
+ * has no platform record and therefore cannot hold a grant.
  *
  * @param {object} params
  * @param {object} params.gateway
  * @param {object} params.platform result of `loadPlatformContext`
  * @param {string} params.discordUserId
+ * @param {object} [params.member] result of `loadMemberGrants`
+ * @returns {Promise<{plan: object, context: object, actualByGuild: Map<string, Set<string>|null>}>}
  */
-export async function planForUnlinkedDiscordUser({ gateway, platform, discordUserId }) {
-  const context = {
-    member: { id: null, displayName: discordUserId, discordUserId },
-    guilds: platform.guilds,
-    managedRoles: platform.managedRoles,
-    mappings: platform.mappings,
-    memberships: [],
-    certificationIds: [],
-    subdivisionIds: [],
-    manualGrantManagedRoleIds: [],
-  };
+export async function planForDiscordUser({ gateway, platform, discordUserId, member = null }) {
+  const context = buildReconciliationContext(
+    platform,
+    member ?? {
+      member: { id: null, displayName: discordUserId, discordUserId },
+      manualGrantManagedRoleIds: [],
+    },
+  );
 
   const guilds = relevantGuilds(context);
   const actualByGuild = await readActualState(gateway, discordUserId, guilds);
-  const desiredState = computeDesiredState(context, actualByGuild, { mappingOnly: true });
+  const desiredState = computeDesiredState(context, actualByGuild, { mappingOnly: !member });
   const plan = diffMemberState({ discordUserId, desiredState, actualByGuild, guilds });
 
   return { plan, context, actualByGuild };
@@ -133,43 +93,79 @@ export async function planForUnlinkedDiscordUser({ gateway, platform, discordUse
  */
 export async function planForUser({ gateway, userId, prisma }) {
   const platform = await loadPlatformContext(prisma);
-  const roster = await loadMemberRoster(userId, { prisma });
-  if (!roster) return null;
-  return planMemberReconciliation({ gateway, platform, roster });
+  const member = await loadMemberGrants(userId, { prisma });
+  if (!member) return null;
+
+  if (!member.member.discordUserId) {
+    return {
+      context: buildReconciliationContext(platform, member),
+      actualByGuild: new Map(),
+      plan: {
+        actions: [],
+        conflicts: [],
+        warnings: [
+          {
+            type: 'MEMBER_NOT_LINKED',
+            message:
+              'This member has no linked Discord account, so no roles can be synchronized for them.',
+            details: { userId },
+          },
+        ],
+        guildsMissingMember: [],
+        rolesReviewed: 0,
+      },
+    };
+  }
+
+  return planForDiscordUser({
+    gateway,
+    platform,
+    discordUserId: member.member.discordUserId,
+    member,
+  });
 }
 
 /**
- * Plans reconciliation for many members, reusing one platform context.
+ * Plans reconciliation for many Discord accounts, reusing one platform context.
  *
  * @param {object} params
  * @param {object} params.gateway
- * @param {string[]} params.userIds
+ * @param {Array<{discordUserId: string, userId?: string|null}>} params.targets
  * @param {import('@prisma/client').PrismaClient} [params.prisma]
  * @param {(progress: {completed: number, total: number}) => void} [params.onProgress]
  * @param {number} [params.concurrency]
  */
-export async function planForUsers({ gateway, userIds, prisma, onProgress, concurrency = 5 }) {
-  const platform = await loadPlatformContext(prisma);
+export async function planForTargets({
+  gateway,
+  targets,
+  prisma,
+  onProgress,
+  concurrency = 5,
+  platform: providedPlatform,
+}) {
+  const platform = providedPlatform ?? (await loadPlatformContext(prisma));
   const results = [];
   let completed = 0;
 
   // Bounded concurrency: Discord rate limits are per-route, and firing 400 member
   // fetches at once is the fastest way to get the bot throttled.
-  for (let index = 0; index < userIds.length; index += concurrency) {
-    const batch = userIds.slice(index, index + concurrency);
+  for (let index = 0; index < targets.length; index += concurrency) {
+    const batch = targets.slice(index, index + concurrency);
     const planned = await Promise.all(
-      batch.map(async (userId) => {
-        const roster = await loadMemberRoster(userId, { prisma });
-        if (!roster) return null;
-        const { plan } = await planMemberReconciliation({ gateway, platform, roster });
-        return { userId, discordUserId: roster.member.discordUserId, plan };
+      batch.map(async (target) => {
+        const member = target.userId ? await loadMemberGrants(target.userId, { prisma }) : null;
+        const { plan } = await planForDiscordUser({
+          gateway,
+          platform,
+          discordUserId: target.discordUserId,
+          member,
+        });
+        return { userId: target.userId ?? null, discordUserId: target.discordUserId, plan };
       }),
     );
-    for (const entry of planned) {
-      if (entry) results.push(entry);
-    }
+    results.push(...planned.filter(Boolean));
     completed += batch.length;
-    onProgress?.({ completed, total: userIds.length });
+    onProgress?.({ completed, total: targets.length });
   }
 
   return { platform, memberPlans: results, aggregate: aggregatePlans(results) };

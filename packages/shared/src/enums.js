@@ -24,41 +24,6 @@ export const UserStatus = Object.freeze({
 });
 
 /** @readonly */
-export const MembershipStatus = Object.freeze({
-  ACTIVE: 'ACTIVE',
-  LOA: 'LOA',
-  SUSPENDED: 'SUSPENDED',
-  TERMINATED: 'TERMINATED',
-  TRANSFER_PENDING: 'TRANSFER_PENDING',
-  INACTIVE: 'INACTIVE',
-});
-
-/** Statuses that still represent a person who belongs to the department. */
-export const ACTIVE_MEMBERSHIP_STATUSES = Object.freeze([
-  MembershipStatus.ACTIVE,
-  MembershipStatus.LOA,
-  MembershipStatus.SUSPENDED,
-  MembershipStatus.TRANSFER_PENDING,
-]);
-
-/** @readonly */
-export const MembershipEventType = Object.freeze({
-  HIRED: 'HIRED',
-  REHIRED: 'REHIRED',
-  PROMOTED: 'PROMOTED',
-  DEMOTED: 'DEMOTED',
-  TRANSFERRED_IN: 'TRANSFERRED_IN',
-  TRANSFERRED_OUT: 'TRANSFERRED_OUT',
-  LOA_STARTED: 'LOA_STARTED',
-  LOA_ENDED: 'LOA_ENDED',
-  SUSPENDED: 'SUSPENDED',
-  REINSTATED: 'REINSTATED',
-  TERMINATED: 'TERMINATED',
-  CALLSIGN_CHANGED: 'CALLSIGN_CHANGED',
-  NOTE_ADDED: 'NOTE_ADDED',
-});
-
-/** @readonly */
 export const MappingDirection = Object.freeze({
   ONE_WAY: 'ONE_WAY',
   TWO_WAY: 'TWO_WAY',
@@ -67,7 +32,6 @@ export const MappingDirection = Object.freeze({
 /**
  * Which system decides the correct value of a managed role.
  *
- * - ROSTER          the database roster is authoritative (official ranks, membership)
  * - SOURCE_DISCORD  the mapping source guild's Discord state is authoritative
  * - TARGET_DISCORD  the mapping target guild's Discord state is authoritative
  * - MANUAL          an explicit, time-bounded human grant is authoritative
@@ -76,7 +40,6 @@ export const MappingDirection = Object.freeze({
  * @readonly
  */
 export const AuthoritySource = Object.freeze({
-  ROSTER: 'ROSTER',
   SOURCE_DISCORD: 'SOURCE_DISCORD',
   TARGET_DISCORD: 'TARGET_DISCORD',
   MANUAL: 'MANUAL',
@@ -86,33 +49,18 @@ export const AuthoritySource = Object.freeze({
 /**
  * Why the platform manages a particular Discord role. Only roles with a
  * `ManagedRole` record may ever be removed by the reconciliation engine.
+ *
+ * - MAPPING       participates in cross-guild mappings
+ * - MANUAL_GRANT  granted through a time-bounded manual grant
+ * - OTHER         known to the platform but never added or removed automatically
+ *
  * @readonly
  */
 export const RolePurpose = Object.freeze({
-  DEPARTMENT_MEMBERSHIP: 'DEPARTMENT_MEMBERSHIP',
-  RANK: 'RANK',
-  SUPERVISOR: 'SUPERVISOR',
-  COMMAND: 'COMMAND',
-  CERTIFICATION: 'CERTIFICATION',
-  SUBDIVISION: 'SUBDIVISION',
-  STATUS_LOA: 'STATUS_LOA',
-  STATUS_SUSPENDED: 'STATUS_SUSPENDED',
   MAPPING: 'MAPPING',
   MANUAL_GRANT: 'MANUAL_GRANT',
   OTHER: 'OTHER',
 });
-
-/** Role purposes whose desired state comes from roster data. */
-export const ROSTER_DRIVEN_PURPOSES = Object.freeze([
-  RolePurpose.DEPARTMENT_MEMBERSHIP,
-  RolePurpose.RANK,
-  RolePurpose.SUPERVISOR,
-  RolePurpose.COMMAND,
-  RolePurpose.CERTIFICATION,
-  RolePurpose.SUBDIVISION,
-  RolePurpose.STATUS_LOA,
-  RolePurpose.STATUS_SUSPENDED,
-]);
 
 /**
  * How strongly a role is protected.
@@ -131,20 +79,17 @@ export const ProtectionLevel = Object.freeze({
 export const PermissionScopeType = Object.freeze({
   GLOBAL: 'GLOBAL',
   GUILD: 'GUILD',
-  DEPARTMENT: 'DEPARTMENT',
-  SUBDIVISION: 'SUBDIVISION',
 });
 
 /** @readonly */
 export const SyncJobType = Object.freeze({
   MEMBER_RESYNC: 'MEMBER_RESYNC',
-  DEPARTMENT_RESYNC: 'DEPARTMENT_RESYNC',
   GUILD_RESYNC: 'GUILD_RESYNC',
   GLOBAL_RESYNC: 'GLOBAL_RESYNC',
   ROLE_ADD: 'ROLE_ADD',
   ROLE_REMOVE: 'ROLE_REMOVE',
-  ROSTER_CHANGE: 'ROSTER_CHANGE',
   MAPPING_PROPAGATION: 'MAPPING_PROPAGATION',
+  GRANT_CHANGE: 'GRANT_CHANGE',
   SCHEDULED_RECONCILIATION: 'SCHEDULED_RECONCILIATION',
   MAPPING_VALIDATION: 'MAPPING_VALIDATION',
 });
@@ -266,21 +211,11 @@ export const AuditAction = Object.freeze({
   MAPPING_TESTED: 'mapping.tested',
   MAPPING_REJECTED: 'mapping.rejected',
 
-  ROSTER_HIRED: 'roster.hired',
-  ROSTER_REMOVED: 'roster.removed',
-  ROSTER_PROMOTED: 'roster.promoted',
-  ROSTER_DEMOTED: 'roster.demoted',
-  ROSTER_TRANSFERRED: 'roster.transferred',
-  ROSTER_LOA_STARTED: 'roster.loa_started',
-  ROSTER_LOA_ENDED: 'roster.loa_ended',
-  ROSTER_SUSPENDED: 'roster.suspended',
-  ROSTER_REINSTATED: 'roster.reinstated',
-  ROSTER_CALLSIGN_CHANGED: 'roster.callsign_changed',
+  MANAGED_ROLE_UPSERTED: 'managed_role.upserted',
+  MANAGED_ROLE_REMOVED: 'managed_role.removed',
 
-  CERTIFICATION_ASSIGNED: 'certification.assigned',
-  CERTIFICATION_REMOVED: 'certification.removed',
-  SUBDIVISION_ADDED: 'subdivision.added',
-  SUBDIVISION_REMOVED: 'subdivision.removed',
+  GRANT_ISSUED: 'grant.issued',
+  GRANT_REVOKED: 'grant.revoked',
 
   MEMBER_LINKED: 'member.linked',
   MEMBER_UNLINKED: 'member.unlinked',

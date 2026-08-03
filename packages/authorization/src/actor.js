@@ -47,7 +47,6 @@ export async function loadActor({ userId, discordUserId, prisma = getPrisma(), r
       capabilityKey: true,
       scopeType: true,
       scopeId: true,
-      maxRankOrder: true,
       maxPermissionLevel: true,
     },
   });

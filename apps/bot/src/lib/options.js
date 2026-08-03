@@ -5,18 +5,6 @@
  * defined once here rather than retyped in every command.
  */
 
-/** A department picker (autocompleted, scope filtered). */
-export const departmentOption =
-  (required = true, name = 'department', description = 'The department') =>
-  (option) =>
-    option.setName(name).setDescription(description).setRequired(required).setAutocomplete(true);
-
-/** A rank picker, filtered by the department option in the same command. */
-export const rankOption =
-  (required = true, name = 'rank', description = 'The rank') =>
-  (option) =>
-    option.setName(name).setDescription(description).setRequired(required).setAutocomplete(true);
-
 /** The member a command acts on, as a real Discord user picker. */
 export const memberOption =
   (required = true, name = 'member', description = 'The community member') =>

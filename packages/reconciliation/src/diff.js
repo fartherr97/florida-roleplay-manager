@@ -93,7 +93,7 @@ export function diffMemberState({ discordUserId, desiredState, actualByGuild, gu
         discordGuildId: guildId,
         discordUserId,
         discordRoleId: roleId,
-        reason: 'no longer granted by roster, mapping or manual grant',
+        reason: 'no longer granted by a mapping or a manual grant',
         managedRoleId: null,
         mappingId: null,
       });

@@ -59,6 +59,9 @@ describe.skipIf(!available)('REST API', () => {
     return { cookie: `frm_session=${signed}`, csrfToken };
   }
 
+  const asAdmin = () => signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+  const asGuildAdmin = () => signIn(fixtures.users.guildAdmin.id, IDS.D_GUILD_ADMIN);
+
   // -------------------------------------------------------------------------
   describe('public endpoints', () => {
     it('serves liveness without a session', async () => {
@@ -99,22 +102,26 @@ describe.skipIf(!available)('REST API', () => {
     });
 
     it('serves the profile for a valid session', async () => {
-      const { cookie } = await signIn(fixtures.users.sheriff.id, IDS.D_SHERIFF);
+      const { cookie } = await asGuildAdmin();
       const response = await app.inject({ method: 'GET', url: '/api/me', headers: { cookie } });
 
       expect(response.statusCode).toBe(200);
       const body = response.json();
-      expect(body.user.displayName).toBe('Demo Sheriff');
-      expect(body.capabilities.some((entry) => entry.capability === 'roster.promote')).toBe(true);
+      expect(body.user.displayName).toBe('HCSO Administrator');
+      expect(body.capabilities.some((entry) => entry.capability === 'mapping.create')).toBe(true);
+      // The scope travels with the capability, so a website can render the same limits.
+      expect(
+        body.capabilities.every((entry) => entry.scopeId === fixtures.guilds.hcsoGuild.id),
+      ).toBe(true);
     });
 
     it('refuses a member whose website access has been withdrawn', async () => {
       await testPrisma().user.update({
-        where: { id: fixtures.users.sheriff.id },
+        where: { id: fixtures.users.guildAdmin.id },
         data: { websiteAccess: false },
       });
 
-      const { cookie } = await signIn(fixtures.users.sheriff.id, IDS.D_SHERIFF);
+      const { cookie } = await asGuildAdmin();
       const response = await app.inject({ method: 'GET', url: '/api/me', headers: { cookie } });
 
       // Re-loaded on every request, so revocation is immediate rather than waiting for
@@ -126,12 +133,12 @@ describe.skipIf(!available)('REST API', () => {
   // -------------------------------------------------------------------------
   describe('CSRF protection', () => {
     it('refuses an unsafe request without the token', async () => {
-      const { cookie } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie } = await asAdmin();
       const response = await app.inject({
         method: 'POST',
         url: '/api/sync/member',
         headers: { cookie },
-        payload: { discordUserId: IDS.D_DEPUTY },
+        payload: { discordUserId: IDS.D_MEMBER },
       });
 
       expect(response.statusCode).toBe(401);
@@ -139,23 +146,23 @@ describe.skipIf(!available)('REST API', () => {
     });
 
     it('refuses a request with the wrong token', async () => {
-      const { cookie } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie } = await asAdmin();
       const response = await app.inject({
         method: 'POST',
         url: '/api/sync/member',
         headers: { cookie, 'x-csrf-token': randomUUID() },
-        payload: { discordUserId: IDS.D_DEPUTY },
+        payload: { discordUserId: IDS.D_MEMBER },
       });
       expect(response.statusCode).toBe(401);
     });
 
     it('accepts a request carrying the matching token', async () => {
-      const { cookie, csrfToken } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie, csrfToken } = await asAdmin();
       const response = await app.inject({
         method: 'POST',
         url: '/api/sync/member',
         headers: { cookie, 'x-csrf-token': csrfToken },
-        payload: { discordUserId: IDS.D_DEPUTY, dryRun: true },
+        payload: { discordUserId: IDS.D_MEMBER, dryRun: true },
       });
 
       expect(response.statusCode).toBe(200);
@@ -163,7 +170,7 @@ describe.skipIf(!available)('REST API', () => {
     });
 
     it('does not require a token for safe methods', async () => {
-      const { cookie } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie } = await asAdmin();
       const response = await app.inject({
         method: 'GET',
         url: '/api/guilds',
@@ -175,20 +182,20 @@ describe.skipIf(!available)('REST API', () => {
 
   // -------------------------------------------------------------------------
   describe('authorization is enforced server side', () => {
-    it('refuses a roster action outside the actor department', async () => {
-      const { cookie, csrfToken } = await signIn(fixtures.users.sheriff.id, IDS.D_SHERIFF);
+    it('refuses an action on a guild outside the actor scope', async () => {
+      const { cookie, csrfToken } = await asGuildAdmin();
 
-      // The sheriff is scoped to HCSO; the identifiers here are FHP's. Supplying them
-      // directly from the client must not widen their authority.
+      // The guild administrator is scoped to HCSO; the identifier here is FHP's.
+      // Supplying it directly from the client must not widen their authority.
       const response = await app.inject({
         method: 'POST',
-        url: '/api/roster/promote',
+        url: '/api/roles',
         headers: { cookie, 'x-csrf-token': csrfToken },
         payload: {
-          departmentId: fixtures.departments.fhp.id,
-          discordUserId: IDS.D_TROOPER,
-          rankId: fixtures.ranks.trooper.id,
-          reason: 'attempting to act outside my department',
+          guildId: fixtures.guilds.fhpGuild.id,
+          discordRoleId: IDS.R_FHP_MEMBER,
+          name: 'Department Member',
+          reason: 'attempting to act outside my guild',
         },
       });
 
@@ -196,27 +203,25 @@ describe.skipIf(!available)('REST API', () => {
       expect(response.json().error.code).toBe('FORBIDDEN');
     });
 
-    it('refuses a promotion above the actor rank ceiling', async () => {
-      const { cookie, csrfToken } = await signIn(fixtures.users.sheriff.id, IDS.D_SHERIFF);
+    it('refuses to act on somebody at or above the actor authority', async () => {
+      const { cookie, csrfToken } = await asGuildAdmin();
 
       const response = await app.inject({
         method: 'POST',
-        url: '/api/roster/promote',
+        url: '/api/grants',
         headers: { cookie, 'x-csrf-token': csrfToken },
         payload: {
-          departmentId: fixtures.departments.hcso.id,
-          discordUserId: IDS.D_DEPUTY,
-          rankId: fixtures.ranks.colonel.id,
-          reason: 'above my ceiling',
+          discordUserId: IDS.D_ADMIN,
+          managedRoleId: fixtures.managedRoles.grantable.id,
+          reason: 'targeting an administrator',
         },
       });
 
       expect(response.statusCode).toBe(403);
-      expect(response.json().error.code).toBe('RANK_CEILING');
     });
 
     it('refuses guild registration by a non-administrator', async () => {
-      const { cookie, csrfToken } = await signIn(fixtures.users.sheriff.id, IDS.D_SHERIFF);
+      const { cookie, csrfToken } = await asGuildAdmin();
       const response = await app.inject({
         method: 'POST',
         url: '/api/guilds',
@@ -232,37 +237,52 @@ describe.skipIf(!available)('REST API', () => {
       expect(response.statusCode).toBe(403);
     });
 
-    it('allows an authorized promotion and returns the new state', async () => {
-      const { cookie, csrfToken } = await signIn(fixtures.users.sheriff.id, IDS.D_SHERIFF);
+    it('scopes a listing to what the actor may see', async () => {
+      const { cookie } = await asGuildAdmin();
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/roles',
+        headers: { cookie },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const { items } = response.json();
+      expect(items.length).toBeGreaterThan(0);
+      expect(items.every((role) => role.guild.id === fixtures.guilds.hcsoGuild.id)).toBe(true);
+    });
+
+    it('allows an authorized action and returns the new state', async () => {
+      const { cookie, csrfToken } = await asGuildAdmin();
       const response = await app.inject({
         method: 'POST',
-        url: '/api/roster/promote',
+        url: '/api/grants',
         headers: { cookie, 'x-csrf-token': csrfToken },
         payload: {
-          departmentId: fixtures.departments.hcso.id,
-          discordUserId: IDS.D_DEPUTY,
-          rankId: fixtures.ranks.corporal.id,
-          reason: 'earned it',
+          discordUserId: IDS.D_MEMBER,
+          managedRoleId: fixtures.managedRoles.grantable.id,
+          reason: 'temporary investigation access',
         },
       });
 
       expect(response.statusCode).toBe(200);
-      expect(response.json().membership.rank.name).toBe('Corporal');
+      const body = response.json();
+      expect(body.grant.managedRoleId).toBe(fixtures.managedRoles.grantable.id);
+      expect(body.syncJob.type).toBe('GRANT_CHANGE');
     });
   });
 
   // -------------------------------------------------------------------------
   describe('input validation and error hygiene', () => {
     it('rejects a malformed identifier without touching the database', async () => {
-      const { cookie, csrfToken } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie, csrfToken } = await asAdmin();
       const response = await app.inject({
         method: 'POST',
-        url: '/api/roster/promote',
+        url: '/api/roles',
         headers: { cookie, 'x-csrf-token': csrfToken },
         payload: {
-          departmentId: 'not-a-uuid',
-          discordUserId: 'not-a-snowflake',
-          rankId: 'nope',
+          guildId: 'not-a-uuid',
+          discordRoleId: 'not-a-snowflake',
+          name: '',
           reason: 'malformed',
         },
       });
@@ -272,7 +292,7 @@ describe.skipIf(!available)('REST API', () => {
     });
 
     it('never returns a stack trace or an internal message', async () => {
-      const { cookie } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie } = await asAdmin();
       const response = await app.inject({
         method: 'GET',
         url: '/api/mappings/00000000-0000-4000-8000-000000000000',
@@ -307,7 +327,7 @@ describe.skipIf(!available)('REST API', () => {
   // -------------------------------------------------------------------------
   describe('listing and pagination', () => {
     it('returns a paginated envelope', async () => {
-      const { cookie } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie } = await asAdmin();
       const response = await app.inject({
         method: 'GET',
         url: '/api/guilds?page=1&pageSize=2',
@@ -321,7 +341,7 @@ describe.skipIf(!available)('REST API', () => {
     });
 
     it('caps an oversized page size instead of trusting it', async () => {
-      const { cookie } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie } = await asAdmin();
       const response = await app.inject({
         method: 'GET',
         url: '/api/guilds?pageSize=100000',
@@ -331,7 +351,7 @@ describe.skipIf(!available)('REST API', () => {
     });
 
     it('refuses to sort by an arbitrary column', async () => {
-      const { cookie } = await signIn(fixtures.users.admin.id, IDS.D_ADMIN);
+      const { cookie } = await asAdmin();
       const response = await app.inject({
         method: 'GET',
         url: '/api/guilds?sortBy=discordGuildId',

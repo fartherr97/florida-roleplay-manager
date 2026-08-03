@@ -11,8 +11,7 @@
  */
 import { createLogger } from '@frm/logging';
 import { getPrisma, notDeleted } from '@frm/database';
-import { departmentScopeFilter, guildScopeFilter } from '@frm/authorization';
-import { MembershipStatus } from '@frm/shared';
+import { guildScopeFilter } from '@frm/authorization';
 
 const log = createLogger('bot.autocomplete');
 
@@ -44,24 +43,6 @@ export async function handleAutocomplete(interaction, { ctx, gateway }) {
 
   try {
     switch (focused.name) {
-      case 'department':
-      case 'target_department':
-        return interaction.respond(toChoices(await departmentChoices(ctx, prisma, query)));
-
-      case 'rank':
-      case 'target_rank':
-        return interaction.respond(
-          toChoices(
-            await rankChoices(
-              prisma,
-              interaction.options.getString(
-                focused.name === 'target_rank' ? 'target_department' : 'department',
-              ),
-              query,
-            ),
-          ),
-        );
-
       case 'mapping':
         return interaction.respond(toChoices(await mappingChoices(prisma, query)));
 
@@ -94,17 +75,8 @@ export async function handleAutocomplete(interaction, { ctx, gateway }) {
           ),
         );
 
-      case 'certification':
-        return interaction.respond(toChoices(await certificationChoices(prisma, query)));
-
-      case 'subdivision':
-        return interaction.respond(toChoices(await subdivisionChoices(prisma, query)));
-
       case 'capability':
         return interaction.respond(toChoices(await capabilityChoices(prisma, query)));
-
-      case 'callsign':
-        return interaction.respond(toChoices(await callsignChoices(prisma, query)));
 
       default:
         return interaction.respond([]);
@@ -115,37 +87,6 @@ export async function handleAutocomplete(interaction, { ctx, gateway }) {
     log.warn({ err: error?.message, option: focused.name }, 'autocomplete failed');
     return interaction.respond([]).catch(() => {});
   }
-}
-
-async function departmentChoices(ctx, prisma, query) {
-  const allowed = departmentScopeFilter(ctx.actor, 'roster.view');
-  const departments = await prisma.department.findMany({
-    where: {
-      ...notDeleted,
-      enabled: true,
-      ...(allowed !== null && allowed.length > 0 ? { id: { in: allowed } } : {}),
-    },
-    orderBy: { name: 'asc' },
-    take: 100,
-  });
-
-  return departments
-    .filter((row) => matches(row.name, query) || matches(row.abbreviation, query))
-    .map((row) => ({ name: `${row.abbreviation} — ${row.name}`, value: row.id }));
-}
-
-async function rankChoices(prisma, departmentId, query) {
-  if (!departmentId) {
-    return [{ name: 'Choose a department first', value: 'none' }];
-  }
-  const ranks = await prisma.rank.findMany({
-    where: { departmentId, ...notDeleted },
-    orderBy: { order: 'desc' },
-    take: 100,
-  });
-  return ranks
-    .filter((rank) => matches(rank.name, query))
-    .map((rank) => ({ name: `${rank.name} (order ${rank.order})`, value: rank.id }));
 }
 
 async function mappingChoices(prisma, query) {
@@ -206,33 +147,6 @@ async function roleChoices(prisma, gateway, guildRef, query) {
     }));
 }
 
-async function certificationChoices(prisma, query) {
-  const certifications = await prisma.certification.findMany({
-    where: notDeleted,
-    orderBy: { name: 'asc' },
-    take: 100,
-    include: { department: { select: { abbreviation: true } } },
-  });
-  return certifications
-    .filter((row) => matches(row.name, query) || matches(row.key, query))
-    .map((row) => ({
-      name: row.department ? `${row.name} (${row.department.abbreviation})` : row.name,
-      value: row.id,
-    }));
-}
-
-async function subdivisionChoices(prisma, query) {
-  const subdivisions = await prisma.subdivision.findMany({
-    where: notDeleted,
-    orderBy: { name: 'asc' },
-    take: 100,
-    include: { department: { select: { abbreviation: true } } },
-  });
-  return subdivisions
-    .filter((row) => matches(row.name, query))
-    .map((row) => ({ name: `${row.name} (${row.department.abbreviation})`, value: row.id }));
-}
-
 async function capabilityChoices(prisma, query) {
   const capabilities = await prisma.permissionCapability.findMany({
     orderBy: [{ category: 'asc' }, { key: 'asc' }],
@@ -240,19 +154,4 @@ async function capabilityChoices(prisma, query) {
   return capabilities
     .filter((row) => matches(row.key, query) || matches(row.description, query))
     .map((row) => ({ name: `${row.key}${row.dangerous ? ' ⚠' : ''}`, value: row.key }));
-}
-
-async function callsignChoices(prisma, query) {
-  const memberships = await prisma.departmentMembership.findMany({
-    where: {
-      ...notDeleted,
-      callsign: { not: null },
-      status: { not: MembershipStatus.TERMINATED },
-    },
-    take: 100,
-    include: { user: { select: { displayName: true } } },
-  });
-  return memberships
-    .filter((row) => matches(row.callsign, query))
-    .map((row) => ({ name: `${row.callsign} — ${row.user.displayName}`, value: row.callsign }));
 }

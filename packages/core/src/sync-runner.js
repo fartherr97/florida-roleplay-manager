@@ -13,13 +13,12 @@
  *   4. **Never swallow a failure.** Every failed action becomes a `SyncIssue` with a
  *      typed reason, and permanent failures are not retried.
  */
-import { getPrisma, notDeleted } from '@frm/database';
+import { currentlyEffective, getPrisma, notDeleted } from '@frm/database';
 import { createLogger, serializeError } from '@frm/logging';
 import {
   ActionSource,
   AuditAction,
   IssueSeverity,
-  MembershipStatus,
   SyncActionStatus,
   SyncActionType,
   SyncIssueType,
@@ -30,12 +29,7 @@ import {
 } from '@frm/shared';
 import { checkRoleOperation } from '@frm/discord';
 import { discardSyncMarker, withMemberLock, writeSyncMarker } from '@frm/queue';
-import {
-  loadMemberRoster,
-  loadPlatformContext,
-  planForUnlinkedDiscordUser,
-  planMemberReconciliation,
-} from '@frm/reconciliation';
+import { loadMemberGrants, loadPlatformContext, planForDiscordUser } from '@frm/reconciliation';
 import { recordAudit } from './audit-service.js';
 import { notifyGlobalAdmins } from './notify.js';
 import { systemContext } from './context.js';
@@ -71,7 +65,7 @@ export async function runSyncJob({ jobId, gateway, prisma = getPrisma(), onProgr
   });
 
   try {
-    const targets = await resolveTargets(job, prisma);
+    const targets = await resolveTargets(job, prisma, gateway);
     const platform = await loadPlatformContext(prisma);
 
     await prisma.syncJob.update({
@@ -137,70 +131,75 @@ export async function runSyncJob({ jobId, gateway, prisma = getPrisma(), onProgr
 }
 
 /**
- * Works out which members a job covers.
+ * Works out which Discord accounts a job covers.
  *
- * @returns {Promise<Array<{userId: string|null, discordUserId: string|null}>>}
+ * Everything is keyed on a Discord account rather than a platform member, because
+ * mappings apply to whoever holds the source role — including people who have never
+ * signed in. A platform id is attached when one exists, which is what adds that
+ * account's manual grants to its plan.
+ *
+ * @returns {Promise<Array<{discordUserId: string, userId: string|null}>>}
  */
-async function resolveTargets(job, prisma) {
+async function resolveTargets(job, prisma, gateway) {
   const payload = job.payload ?? {};
 
   switch (job.type) {
     case SyncJobType.MEMBER_RESYNC:
-    case SyncJobType.ROSTER_CHANGE: {
+    case SyncJobType.GRANT_CHANGE: {
       const userId = payload.userId ?? job.targetUserId;
-      return userId ? [{ userId, discordUserId: null }] : [];
+      if (!userId) return [];
+      const member = await loadMemberGrants(userId, { prisma });
+      if (!member?.member.discordUserId) return [];
+      return [{ discordUserId: member.member.discordUserId, userId }];
     }
 
     case SyncJobType.MAPPING_PROPAGATION: {
-      // Mapping propagation is keyed on a Discord account, which may or may not have a
-      // platform member record.
       const discordUserId = payload.discordUserId;
       if (!discordUserId) return [];
       const identity = await prisma.discordIdentity.findUnique({
         where: { discordUserId },
         select: { userId: true },
       });
-      return [{ userId: identity?.userId ?? null, discordUserId }];
-    }
-
-    case SyncJobType.DEPARTMENT_RESYNC: {
-      const memberships = await prisma.departmentMembership.findMany({
-        where: {
-          departmentId: payload.departmentId ?? job.departmentId,
-          ...notDeleted,
-          ...(payload.includeInactive ? {} : { status: { not: MembershipStatus.TERMINATED } }),
-        },
-        select: { userId: true },
-      });
-      return memberships.map((row) => ({ userId: row.userId, discordUserId: null }));
+      return [{ discordUserId, userId: identity?.userId ?? null }];
     }
 
     case SyncJobType.GUILD_RESYNC: {
       const guild = await prisma.approvedGuild.findUnique({
         where: { id: payload.guildId ?? job.approvedGuildId },
-        select: { id: true, departmentId: true },
+        select: { id: true, discordGuildId: true },
       });
       if (!guild) return [];
-      const memberships = await prisma.departmentMembership.findMany({
-        where: {
-          ...notDeleted,
-          status: { not: MembershipStatus.TERMINATED },
-          ...(guild.departmentId ? { departmentId: guild.departmentId } : {}),
-        },
-        select: { userId: true },
-        distinct: ['userId'],
-      });
-      return memberships.map((row) => ({ userId: row.userId, discordUserId: null }));
+      return withPlatformIds(await listGuildMembers(gateway, guild.discordGuildId), prisma);
     }
 
     case SyncJobType.GLOBAL_RESYNC:
     case SyncJobType.SCHEDULED_RECONCILIATION: {
-      const memberships = await prisma.departmentMembership.findMany({
-        where: { ...notDeleted, status: { not: MembershipStatus.TERMINATED } },
-        select: { userId: true },
+      const guilds = await prisma.approvedGuild.findMany({
+        where: { ...notDeleted, enabled: true, syncEnabled: true },
+        select: { discordGuildId: true },
+      });
+
+      // Deduplicate: one person in five guilds is still one member to reconcile, and
+      // reconciliation covers all of their guilds in a single plan.
+      const discordUserIds = new Set();
+      for (const guild of guilds) {
+        for (const member of await listGuildMembers(gateway, guild.discordGuildId)) {
+          discordUserIds.add(member);
+        }
+      }
+
+      // Members holding a manual grant matter even if they are not currently in any
+      // guild we could enumerate: their grant may have expired and need removing.
+      const granted = await prisma.manualRoleGrant.findMany({
+        where: currentlyEffective(),
+        select: { user: { select: { primaryDiscordId: true } } },
         distinct: ['userId'],
       });
-      return memberships.map((row) => ({ userId: row.userId, discordUserId: null }));
+      for (const grant of granted) {
+        if (grant.user.primaryDiscordId) discordUserIds.add(grant.user.primaryDiscordId);
+      }
+
+      return withPlatformIds([...discordUserIds], prisma);
     }
 
     default:
@@ -208,25 +207,45 @@ async function resolveTargets(job, prisma) {
   }
 }
 
+/** Reads a guild's Discord member list, tolerating a guild we cannot enumerate. */
+async function listGuildMembers(gateway, discordGuildId) {
+  try {
+    const members = await gateway.listMembers(discordGuildId);
+    return members.map((member) => member.id);
+  } catch (error) {
+    log.warn({ discordGuildId, err: serializeError(error) }, 'could not list guild members');
+    return [];
+  }
+}
+
+/** Attaches platform ids to Discord ids in one query rather than one per member. */
+async function withPlatformIds(discordUserIds, prisma) {
+  if (discordUserIds.length === 0) return [];
+
+  const identities = await prisma.discordIdentity.findMany({
+    where: { discordUserId: { in: discordUserIds } },
+    select: { discordUserId: true, userId: true },
+  });
+  const byDiscordId = new Map(identities.map((row) => [row.discordUserId, row.userId]));
+
+  return discordUserIds.map((discordUserId) => ({
+    discordUserId,
+    userId: byDiscordId.get(discordUserId) ?? null,
+  }));
+}
+
 /** Produces the plan for one target. */
 async function planTarget({ target, gateway, platform, prisma }) {
-  if (target.userId) {
-    const roster = await loadMemberRoster(target.userId, { prisma });
-    if (!roster) return null;
-    const { plan } = await planMemberReconciliation({ gateway, platform, roster });
-    return { userId: target.userId, discordUserId: roster.member.discordUserId, plan };
-  }
+  const member = target.userId ? await loadMemberGrants(target.userId, { prisma }) : null;
 
-  if (target.discordUserId) {
-    const { plan } = await planForUnlinkedDiscordUser({
-      gateway,
-      platform,
-      discordUserId: target.discordUserId,
-    });
-    return { userId: null, discordUserId: target.discordUserId, plan };
-  }
+  const { plan } = await planForDiscordUser({
+    gateway,
+    platform,
+    discordUserId: target.discordUserId,
+    member,
+  });
 
-  return null;
+  return { userId: target.userId ?? null, discordUserId: target.discordUserId, plan };
 }
 
 /** The configured maximum-change threshold, falling back to the environment value. */
@@ -277,7 +296,6 @@ async function pauseForThreshold({ job, prisma, removalCount, threshold, plans }
       ctx: systemContext({ label: 'sync-runner' }),
       action: AuditAction.SYNC_JOB_PAUSED,
       syncJobId: job.id,
-      departmentId: job.departmentId,
       approvedGuildId: job.approvedGuildId,
       success: false,
       reason: 'Maximum-change threshold exceeded',
@@ -396,7 +414,7 @@ async function applyAction({ job, entry, action, gateway, prisma }) {
     discordRoleId: action.discordRoleId,
     protectionLevel: managedRole?.protectionLevel,
     // The platform's own reconciliation is the authorized path for protected roles: the
-    // authorization check happened when the roster or mapping change was requested.
+    // authorization check happened when the mapping or grant was requested.
     allowProtected: true,
   });
 
@@ -660,7 +678,6 @@ async function finalizeJob({ job, prisma, outcome, plans }) {
           : AuditAction.SYNC_JOB_FAILED,
       syncJobId: job.id,
       targetUserId: job.targetUserId,
-      departmentId: job.departmentId,
       approvedGuildId: job.approvedGuildId,
       success: status !== SyncJobStatus.FAILED,
       newState: {

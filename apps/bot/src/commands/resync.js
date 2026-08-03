@@ -3,8 +3,8 @@
  *
  * Anything that touches more than one member runs a dry run first, shows the preview,
  * and only then asks for confirmation. That ordering is deliberate: the number an
- * operator needs to see before approving a department-wide change is "how many roles
- * will actually be removed", and the only trustworthy source of that number is the same
+ * operator needs to see before approving a guild-wide change is "how many roles will
+ * actually be removed", and the only trustworthy source of that number is the same
  * planner that will do the work.
  */
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
@@ -12,12 +12,11 @@ import {
   getSyncJob,
   resolveUser,
   resyncAll,
-  resyncDepartment,
   resyncGuild,
   resyncMember,
   waitForJob,
 } from '@frm/core';
-import { SyncActionType, SyncJobStatus } from '@frm/shared';
+import { SyncActionType } from '@frm/shared';
 import { planForUser, summarizePlan } from '@frm/reconciliation';
 import {
   buildEmbed,
@@ -27,30 +26,17 @@ import {
   successEmbed,
   truncate,
 } from '../lib/ui.js';
-import {
-  departmentOption,
-  dryRunOption,
-  guildOption,
-  memberOption,
-  reasonOption,
-} from '../lib/options.js';
+import { dryRunOption, guildOption, memberOption, reasonOption } from '../lib/options.js';
 
 export const data = new SlashCommandBuilder()
   .setName('resync')
-  .setDescription('Synchronize Discord roles with the roster')
+  .setDescription('Synchronize Discord roles with the platform')
   .addSubcommand((sub) =>
     sub
       .setName('member')
       .setDescription('Resynchronize one member')
       .addUserOption(memberOption(true))
       .addBooleanOption(dryRunOption)
-      .addStringOption(reasonOption(false)),
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('department')
-      .setDescription('Resynchronize every member of a department')
-      .addStringOption(departmentOption(true))
       .addStringOption(reasonOption(false)),
   )
   .addSubcommand((sub) =>
@@ -71,7 +57,7 @@ export const data = new SlashCommandBuilder()
       .setName('preview')
       .setDescription('Show what a resynchronization would change, without applying it')
       .addUserOption(memberOption(false))
-      .addStringOption(departmentOption(false)),
+      .addStringOption(guildOption(false)),
   )
   .addSubcommand((sub) =>
     sub
@@ -86,8 +72,6 @@ export async function execute(interaction, { ctx, gateway }) {
   switch (interaction.options.getSubcommand()) {
     case 'member':
       return handleMember(interaction, ctx);
-    case 'department':
-      return handleDepartment(interaction, ctx);
     case 'guild':
       return handleGuild(interaction, ctx);
     case 'all':
@@ -115,62 +99,6 @@ async function handleMember(interaction, ctx) {
 
   const finished = await waitForJob(job.id, { timeoutMs: 20000 });
   return interaction.editReply({ embeds: [await jobEmbed(ctx, finished ?? job, user.tag)] });
-}
-
-async function handleDepartment(interaction, ctx) {
-  const departmentId = interaction.options.getString('department');
-  const reason = interaction.options.getString('reason') ?? undefined;
-
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-  // Dry run first so the confirmation shows real numbers.
-  const { job: dryJob } = await resyncDepartment(ctx, { departmentId, dryRun: true, reason });
-  const finishedDry = await waitForJob(dryJob.id, { timeoutMs: 60000 });
-
-  if (!finishedDry || finishedDry.status === SyncJobStatus.RUNNING) {
-    return interaction.editReply({
-      embeds: [
-        buildEmbed({
-          title: 'Preview still running',
-          description: `The preview is taking a while. Check it with \`/resync status job_id:${dryJob.id}\`.`,
-          color: 'warning',
-        }),
-      ],
-    });
-  }
-
-  const summary = await summarizeJob(ctx, finishedDry.id);
-  if (summary.totalActions === 0) {
-    return interaction.editReply({
-      embeds: [
-        successEmbed(
-          'Nothing to do',
-          'Every member of that department already has the correct roles.',
-        ),
-      ],
-    });
-  }
-
-  const confirmed = await requestConfirmation(interaction, {
-    title: 'Apply these changes?',
-    description:
-      `This will add ${summary.addCount} and remove ${summary.removeCount} roles across ` +
-      `${summary.membersWithChanges} member(s).`,
-    fields: previewFields(summary),
-    confirmLabel: `Apply ${summary.totalActions} changes`,
-  });
-  if (!confirmed) return undefined;
-
-  const { job } = await resyncDepartment(ctx, { departmentId, dryRun: false, reason });
-  return interaction.editReply({
-    embeds: [
-      successEmbed(
-        'Department resynchronization queued',
-        `Job \`${job.id}\` is running. Check progress with \`/resync status job_id:${job.id}\`.`,
-      ),
-    ],
-    components: [],
-  });
 }
 
 async function handleGuild(interaction, ctx) {
@@ -240,14 +168,14 @@ async function handlePreview(interaction, ctx, gateway) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const user = interaction.options.getUser('member');
-  const departmentId = interaction.options.getString('department');
+  const guildId = interaction.options.getString('guild');
 
-  if (!user && !departmentId) {
+  if (!user && !guildId) {
     return interaction.editReply({
       embeds: [
         buildEmbed({
           title: 'Choose what to preview',
-          description: 'Pass a member or a department.',
+          description: 'Pass a member or a guild.',
           color: 'warning',
         }),
       ],
@@ -280,14 +208,14 @@ async function handlePreview(interaction, ctx, gateway) {
     });
   }
 
-  const { job } = await resyncDepartment(ctx, { departmentId, dryRun: true });
+  const { job } = await resyncGuild(ctx, { guildId, dryRun: true });
   const finished = await waitForJob(job.id, { timeoutMs: 60000 });
   const summary = await summarizeJob(ctx, (finished ?? job).id);
 
   return interaction.editReply({
     embeds: [
       previewEmbed({
-        title: 'Preview: department resynchronization',
+        title: 'Preview: guild resynchronization',
         summary,
         sampleActions: summary.sampleActions,
         conflicts: [],

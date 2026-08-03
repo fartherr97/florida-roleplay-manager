@@ -2,19 +2,19 @@
 
 ## What is worth backing up
 
-| Store           | Contains                                                | Losing it means                                                                                                      |
-| --------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **PostgreSQL**  | Everything: rosters, permissions, mappings, audit trail | Irrecoverable loss of community records                                                                              |
-| **Redis**       | Queues, sync markers, locks, sessions                   | In-flight jobs and active sessions; no committed data                                                                |
-| **Environment** | Secrets                                                 | Cannot start; the bot token can be reset, `SESSION_SECRET` cannot be recovered (rotating it just logs everybody out) |
+| Store           | Contains                                                        | Losing it means                                                                                                      |
+| --------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **PostgreSQL**  | Everything: members, permissions, mappings, grants, audit trail | Irrecoverable loss of community records                                                                              |
+| **Redis**       | Queues, sync markers, locks, sessions                           | In-flight jobs and active sessions; no committed data                                                                |
+| **Environment** | Secrets                                                         | Cannot start; the bot token can be reset, `SESSION_SECRET` cannot be recovered (rotating it just logs everybody out) |
 
 Only PostgreSQL genuinely needs backing up. Redis is deliberately expendable: everything in
 it is either reconstructible or short-lived.
 
 ## PostgreSQL backups
 
-Nightly, retained for at least 30 days — long enough to notice that a roster was damaged
-weeks ago.
+Nightly, retained for at least 30 days — long enough to notice that a mapping or a
+permission assignment was damaged weeks ago.
 
 ```bash
 pg_dump --format=custom --no-owner --file="frm-$(date +%F).dump" "$DATABASE_URL"
@@ -42,10 +42,12 @@ database quarterly and check the row counts:
 
 ```sql
 SELECT
-  (SELECT count(*) FROM users)                  AS users,
-  (SELECT count(*) FROM department_memberships) AS memberships,
-  (SELECT count(*) FROM role_mappings)          AS mappings,
-  (SELECT count(*) FROM audit_logs)             AS audit_records;
+  (SELECT count(*) FROM users)                   AS users,
+  (SELECT count(*) FROM managed_roles)           AS managed_roles,
+  (SELECT count(*) FROM role_mappings)           AS mappings,
+  (SELECT count(*) FROM manual_role_grants)      AS grants,
+  (SELECT count(*) FROM permission_assignments)  AS permissions,
+  (SELECT count(*) FROM audit_logs)              AS audit_records;
 ```
 
 ## Redis
@@ -80,9 +82,9 @@ FROM sync_actions
 WHERE sync_job_id = '<job id>' AND action = 'REMOVE_ROLE';
 ```
 
-If the roster is still correct, the fix is to run a normal resync: the engine restores
-whatever the roster says people should have. Roles that were removed and are _not_ roster
-derived have to be re-granted by hand — which is one reason the platform never removes
+If the mappings and grants are still correct, the fix is to run a normal resync: the engine
+restores whatever they imply. Roles that were removed and are _not_ derived from a mapping
+or a grant have to be re-added by hand — which is one reason the platform never removes
 roles it cannot compute.
 
 ### The database was restored to an earlier point
@@ -91,15 +93,15 @@ Discord and the database are now out of step. Reconciliation is the repair tool:
 
 1. Bring the worker up but leave the bot down, so no new events queue up.
 2. `SYNC_DRY_RUN_DEFAULT=true`, then run a global resync and read the plan.
-3. Check the removal count. A large one means the restore lost recent hires or promotions —
-   fix the roster before applying anything.
+3. Check the removal count. A large one means the restore lost recent mappings or grants —
+   re-create them before applying anything.
 4. Disable dry run, run the global resync, bring the bot back.
 
 ### A mapping caused chaos
 
 ```
 /mapping disable mapping:<name> reason:investigating
-/resync preview department:<affected>
+/resync preview guild:<affected>
 ```
 
 Disabling stops further propagation immediately. The preview shows what the corrected state

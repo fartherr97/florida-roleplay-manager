@@ -42,7 +42,7 @@ import {
 } from '@frm/validation';
 import { recordAudit } from './audit-service.js';
 import { detectMappingCycle, mappingsTargeting } from './cycle-detection.js';
-import { requireApprovedGuild } from './resolve.js';
+import { authorizeAnyScope, requireApprovedGuild } from './resolve.js';
 
 const log = createLogger('core.mapping');
 
@@ -70,7 +70,7 @@ export async function listMappings(ctx, input = {}) {
   const query = parseOrThrow(listMappingsSchema, input);
   const prisma = ctx.prisma ?? getPrisma();
 
-  authorize(ctx.actor, { capability: 'mapping.view', scope: {} });
+  authorizeAnyScope(ctx, 'mapping.view');
 
   /** @type {object} */
   const where = { ...notDeleted };
@@ -139,14 +139,8 @@ export async function getMapping(ctx, mappingId) {
  * both at once.
  */
 function authorizeBothSides(ctx, capability, sourceGuild, targetGuild) {
-  authorize(ctx.actor, {
-    capability,
-    scope: { guildId: sourceGuild.id, departmentId: sourceGuild.departmentId ?? undefined },
-  });
-  authorize(ctx.actor, {
-    capability,
-    scope: { guildId: targetGuild.id, departmentId: targetGuild.departmentId ?? undefined },
-  });
+  authorize(ctx.actor, { capability, scope: { guildId: sourceGuild.id } });
+  authorize(ctx.actor, { capability, scope: { guildId: targetGuild.id } });
 }
 
 /**

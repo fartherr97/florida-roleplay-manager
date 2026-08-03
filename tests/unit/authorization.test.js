@@ -1,39 +1,23 @@
 /**
  * Authorization rules.
  *
- * These encode the worked example from the specification: a Sheriff with
- * department-scoped promote authority up to Major must be able to promote their own
- * deputies and nothing else.
+ * The shape of authority here is capability + scope (global or guild) + authority
+ * level. A guild-scoped administrator must be able to run their own guild and nothing
+ * else, and must never be able to hand out more than they hold.
  */
 import { describe, expect, it } from 'vitest';
 import {
   DenialReason,
   assertCanGrant,
   authorize,
-  departmentScopeFilter,
   evaluate,
+  guildScopeFilter,
   hasCapabilityAnywhere,
 } from '@frm/authorization';
 import { PermissionLevel, PermissionScopeType, UserStatus } from '@frm/shared';
 
-const HCSO = 'dep-hcso';
-const FHP = 'dep-fhp';
 const HCSO_GUILD = 'guild-hcso';
-
-/** Builds an actor snapshot without touching the database. */
-function actor({
-  id = 'user-sheriff',
-  level = PermissionLevel.DEPARTMENT_HEAD,
-  status = UserStatus.ACTIVE,
-  assignments = [],
-} = {}) {
-  return {
-    user: { id, displayName: 'Test Actor', status, permissionLevel: level },
-    discordUserId: '100000000000000001',
-    assignments,
-    isSystem: false,
-  };
-}
+const FHP_GUILD = 'guild-fhp';
 
 /**
  * Captures a thrown AppError so assertions can target `userMessage` - the text a
@@ -48,192 +32,125 @@ function thrownBy(fn) {
   throw new Error('Expected the call to throw, but it did not');
 }
 
+/** Builds an actor snapshot without touching the database. */
+function actor({
+  id = 'user-guild-admin',
+  level = PermissionLevel.STAFF,
+  status = UserStatus.ACTIVE,
+  assignments = [],
+} = {}) {
+  return {
+    user: { id, displayName: 'Test Actor', status, permissionLevel: level },
+    discordUserId: '100000000000000001',
+    assignments,
+    isSystem: false,
+  };
+}
+
 function assignment(overrides = {}) {
   return {
     id: 'assignment-1',
-    capabilityKey: 'roster.promote',
-    scopeType: PermissionScopeType.DEPARTMENT,
-    scopeId: HCSO,
-    maxRankOrder: 60, // Major
+    capabilityKey: 'mapping.create',
+    scopeType: PermissionScopeType.GUILD,
+    scopeId: HCSO_GUILD,
     maxPermissionLevel: PermissionLevel.COMMAND,
     ...overrides,
   };
 }
 
-const sheriff = actor({ assignments: [assignment()] });
+const guildAdmin = actor({ assignments: [assignment()] });
 
 describe('capability and scope', () => {
-  it('allows a promotion inside the department and under the rank ceiling', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: {
-        userId: 'user-deputy',
-        permissionLevel: 0,
-        currentRankOrder: 10,
-        resultingRankOrder: 20,
-      },
+  it('allows an action inside the granted guild', () => {
+    const decision = evaluate(guildAdmin, {
+      capability: 'mapping.create',
+      scope: { guildId: HCSO_GUILD },
     });
     expect(decision.allowed).toBe(true);
   });
 
-  it('denies the same promotion in a different department', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.promote',
-      scope: { departmentId: FHP },
-      target: {
-        userId: 'user-trooper',
-        permissionLevel: 0,
-        currentRankOrder: 10,
-        resultingRankOrder: 20,
-      },
+  it('denies the same action in a different guild', () => {
+    const decision = evaluate(guildAdmin, {
+      capability: 'mapping.create',
+      scope: { guildId: FHP_GUILD },
     });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe(DenialReason.OUT_OF_SCOPE);
+  });
+
+  it('denies a guild-scoped holder an action with no guild context', () => {
+    // Nothing identifies which guild this is about, so a guild-scoped grant cannot
+    // cover it. Only a global holder may act here.
+    const decision = evaluate(guildAdmin, { capability: 'mapping.create', scope: {} });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe(DenialReason.OUT_OF_SCOPE);
   });
 
   it('denies a capability the actor does not hold at all', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'guild.register',
-      scope: {},
-    });
+    const decision = evaluate(guildAdmin, { capability: 'guild.register', scope: {} });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe(DenialReason.MISSING_CAPABILITY);
   });
 
   it('treats a grant stored at an unsupported scope type as invalid, not as a wildcard', () => {
-    // guild.register is GLOBAL-only; a DEPARTMENT-scoped row must not authorize it.
+    // guild.register is GLOBAL-only; a GUILD-scoped row must not authorize it.
     const rogue = actor({
       level: PermissionLevel.GLOBAL_ADMIN,
-      assignments: [
-        assignment({
-          capabilityKey: 'guild.register',
-          scopeType: PermissionScopeType.DEPARTMENT,
-          scopeId: HCSO,
-        }),
-      ],
+      assignments: [assignment({ capabilityKey: 'guild.register' })],
     });
     const decision = evaluate(rogue, {
       capability: 'guild.register',
-      scope: { departmentId: HCSO },
+      scope: { guildId: HCSO_GUILD },
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe(DenialReason.OUT_OF_SCOPE);
   });
 
-  it('honours a global assignment for every scope', () => {
+  it('honours a global assignment for every guild', () => {
     const admin = actor({
       level: PermissionLevel.GLOBAL_ADMIN,
       assignments: [
         assignment({
-          capabilityKey: 'roster.promote',
           scopeType: PermissionScopeType.GLOBAL,
           scopeId: '',
-          maxRankOrder: null,
           maxPermissionLevel: null,
         }),
       ],
     });
-    const decision = evaluate(admin, {
-      capability: 'roster.promote',
-      scope: { departmentId: FHP },
-      target: {
-        userId: 'anyone',
-        permissionLevel: 0,
-        currentRankOrder: 70,
-        resultingRankOrder: 80,
-      },
-    });
-    expect(decision.allowed).toBe(true);
-  });
-});
-
-describe('rank hierarchy enforcement', () => {
-  it('denies promoting to a rank above the ceiling', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: {
-        userId: 'user-captain',
-        permissionLevel: 0,
-        currentRankOrder: 50,
-        resultingRankOrder: 70,
-      },
-    });
-    expect(decision.allowed).toBe(false);
-    expect(decision.reason).toBe(DenialReason.RANK_CEILING);
-  });
-
-  it('denies acting on somebody whose current rank is already above the ceiling', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: {
-        userId: 'user-colonel',
-        permissionLevel: 0,
-        currentRankOrder: 70,
-        resultingRankOrder: 20,
-      },
-    });
-    expect(decision.allowed).toBe(false);
-    expect(decision.reason).toBe(DenialReason.RANK_CEILING);
-  });
-
-  it('allows a promotion exactly at the ceiling', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: {
-        userId: 'user-captain',
-        permissionLevel: 0,
-        currentRankOrder: 50,
-        resultingRankOrder: 60,
-      },
-    });
-    expect(decision.allowed).toBe(true);
+    expect(
+      evaluate(admin, { capability: 'mapping.create', scope: { guildId: FHP_GUILD } }).allowed,
+    ).toBe(true);
+    expect(evaluate(admin, { capability: 'mapping.create', scope: {} }).allowed).toBe(true);
   });
 });
 
 describe('authority level enforcement', () => {
   it('denies acting on a peer or superior', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: {
-        userId: 'user-admin',
-        permissionLevel: PermissionLevel.GLOBAL_ADMIN,
-        currentRankOrder: 10,
-        resultingRankOrder: 20,
-      },
+    const decision = evaluate(guildAdmin, {
+      capability: 'mapping.create',
+      scope: { guildId: HCSO_GUILD },
+      target: { userId: 'user-admin', permissionLevel: PermissionLevel.GLOBAL_ADMIN },
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe(DenialReason.LEVEL_CEILING);
   });
 
   it('denies a target above the assignment authority ceiling', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: {
-        userId: 'user-staff',
-        permissionLevel: PermissionLevel.STAFF - 20, // below the actor, above the ceiling
-        currentRankOrder: 10,
-        resultingRankOrder: 20,
-      },
+    const decision = evaluate(guildAdmin, {
+      capability: 'mapping.create',
+      scope: { guildId: HCSO_GUILD },
+      // Below the actor's own level, but above the ceiling on their grant.
+      target: { userId: 'user-manager', permissionLevel: PermissionLevel.MANAGER },
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe(DenialReason.LEVEL_CEILING);
   });
 
   it('denies an actor whose level is below the capability minimum', () => {
-    const junior = actor({
-      level: PermissionLevel.MEMBER,
-      assignments: [assignment()],
-    });
+    const junior = actor({ level: PermissionLevel.MEMBER, assignments: [assignment()] });
     const decision = evaluate(junior, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: { userId: 'x', permissionLevel: 0, currentRankOrder: 10, resultingRankOrder: 20 },
+      capability: 'mapping.create',
+      scope: { guildId: HCSO_GUILD },
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe(DenialReason.LEVEL_TOO_LOW);
@@ -241,29 +158,24 @@ describe('authority level enforcement', () => {
 });
 
 describe('self management', () => {
-  it('refuses to let an actor promote themselves', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: {
-        userId: sheriff.user.id,
-        permissionLevel: 0,
-        currentRankOrder: 10,
-        resultingRankOrder: 20,
-      },
+  it('refuses to let an actor act on their own record', () => {
+    const decision = evaluate(guildAdmin, {
+      capability: 'grant.issue',
+      scope: { guildId: HCSO_GUILD },
+      target: { userId: guildAdmin.user.id },
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe(DenialReason.SELF_MANAGEMENT);
   });
 
   it('allows explicitly self-safe actions', () => {
-    const decision = evaluate(sheriff, {
-      capability: 'roster.view',
-      scope: { departmentId: HCSO },
-      target: { userId: sheriff.user.id },
+    const decision = evaluate(guildAdmin, {
+      capability: 'member.view',
+      scope: { guildId: HCSO_GUILD },
+      target: { userId: guildAdmin.user.id },
       allowSelf: true,
     });
-    // roster.view is not granted to this actor, so it still fails - but on capability,
+    // member.view is not granted to this actor, so it still fails - but on capability,
     // not on the self-management rule.
     expect(decision.reason).toBe(DenialReason.MISSING_CAPABILITY);
   });
@@ -273,9 +185,8 @@ describe('account state', () => {
   it('denies a disabled account regardless of grants', () => {
     const disabled = actor({ status: UserStatus.DISABLED, assignments: [assignment()] });
     const decision = evaluate(disabled, {
-      capability: 'roster.promote',
-      scope: { departmentId: HCSO },
-      target: { userId: 'other', permissionLevel: 0, currentRankOrder: 10, resultingRankOrder: 20 },
+      capability: 'mapping.create',
+      scope: { guildId: HCSO_GUILD },
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe(DenialReason.INACTIVE_ACCOUNT);
@@ -283,22 +194,20 @@ describe('account state', () => {
 });
 
 describe('authorize()', () => {
-  it('throws a typed error on rank ceiling failures', () => {
-    expect(() =>
-      authorize(sheriff, {
-        capability: 'roster.promote',
-        scope: { departmentId: HCSO },
-        target: { userId: 'u', permissionLevel: 0, currentRankOrder: 10, resultingRankOrder: 90 },
-      }),
-    ).toThrowError(/above the maximum rank/i);
+  it('throws a readable error when out of scope', () => {
+    const error = thrownBy(() =>
+      authorize(guildAdmin, { capability: 'mapping.create', scope: { guildId: FHP_GUILD } }),
+    );
+    expect(error.code).toBe('FORBIDDEN');
+    expect(error.userMessage).toMatch(/do not have mapping.create/i);
   });
 
   it('throws a self-management error when acting on self', () => {
     const error = thrownBy(() =>
-      authorize(sheriff, {
-        capability: 'roster.promote',
-        scope: { departmentId: HCSO },
-        target: { userId: sheriff.user.id },
+      authorize(guildAdmin, {
+        capability: 'mapping.create',
+        scope: { guildId: HCSO_GUILD },
+        target: { userId: guildAdmin.user.id },
       }),
     );
     expect(error.code).toBe('SELF_MANAGEMENT');
@@ -307,49 +216,43 @@ describe('authorize()', () => {
 });
 
 describe('scope filters for list queries', () => {
-  it('returns the department ids an actor may see', () => {
-    expect(departmentScopeFilter(sheriff, 'roster.promote')).toEqual([HCSO]);
+  it('returns the guild ids an actor may see', () => {
+    expect(guildScopeFilter(guildAdmin, 'mapping.create')).toEqual([HCSO_GUILD]);
   });
 
   it('returns null (meaning unrestricted) for a global holder', () => {
     const admin = actor({
       assignments: [assignment({ scopeType: PermissionScopeType.GLOBAL, scopeId: '' })],
     });
-    expect(departmentScopeFilter(admin, 'roster.promote')).toBeNull();
+    expect(guildScopeFilter(admin, 'mapping.create')).toBeNull();
   });
 
   it('reports capability presence for UI affordances only', () => {
-    expect(hasCapabilityAnywhere(sheriff, 'roster.promote')).toBe(true);
-    expect(hasCapabilityAnywhere(sheriff, 'guild.register')).toBe(false);
+    expect(hasCapabilityAnywhere(guildAdmin, 'mapping.create')).toBe(true);
+    expect(hasCapabilityAnywhere(guildAdmin, 'guild.register')).toBe(false);
   });
 });
 
 describe('privilege escalation through grants', () => {
   const granter = actor({
-    id: 'user-head',
-    level: PermissionLevel.DEPARTMENT_HEAD,
+    id: 'user-manager',
+    level: PermissionLevel.MANAGER,
     assignments: [
       assignment({
         capabilityKey: 'permission.grant',
-        maxRankOrder: 60,
         maxPermissionLevel: PermissionLevel.COMMAND,
       }),
-      assignment({
-        capabilityKey: 'roster.promote',
-        maxRankOrder: 60,
-        maxPermissionLevel: PermissionLevel.COMMAND,
-      }),
+      assignment({ capabilityKey: 'grant.issue', maxPermissionLevel: PermissionLevel.COMMAND }),
     ],
   });
-  const target = { id: 'user-lieutenant', permissionLevel: PermissionLevel.SUPERVISOR };
+  const target = { id: 'user-target', permissionLevel: PermissionLevel.SUPERVISOR };
 
   it('allows granting a narrower version of a capability the actor holds', () => {
     expect(() =>
       assertCanGrant(granter, {
-        capability: 'roster.promote',
-        scopeType: PermissionScopeType.DEPARTMENT,
-        scopeId: HCSO,
-        maxRankOrder: 30,
+        capability: 'grant.issue',
+        scopeType: PermissionScopeType.GUILD,
+        scopeId: HCSO_GUILD,
         maxPermissionLevel: PermissionLevel.SUPERVISOR,
         targetUser: target,
       }),
@@ -367,65 +270,49 @@ describe('privilege escalation through grants', () => {
     ).toThrowError();
   });
 
-  it('refuses to grant a rank ceiling above the actor own ceiling', () => {
-    expect(() =>
-      assertCanGrant(granter, {
-        capability: 'roster.promote',
-        scopeType: PermissionScopeType.DEPARTMENT,
-        scopeId: HCSO,
-        maxRankOrder: 80,
-        maxPermissionLevel: PermissionLevel.SUPERVISOR,
-        targetUser: target,
-      }),
-    ).toThrowError(/rank ceiling above your own/i);
-  });
-
-  it('refuses to grant an unbounded ceiling when the actor is bounded', () => {
-    expect(() =>
-      assertCanGrant(granter, {
-        capability: 'roster.promote',
-        scopeType: PermissionScopeType.DEPARTMENT,
-        scopeId: HCSO,
-        maxPermissionLevel: PermissionLevel.SUPERVISOR,
-        targetUser: target,
-      }),
-    ).toThrowError(/rank ceiling of at most/i);
-  });
-
-  it('refuses to grant authority at or above the actor own level', () => {
-    expect(() =>
-      assertCanGrant(granter, {
-        capability: 'roster.promote',
-        scopeType: PermissionScopeType.DEPARTMENT,
-        scopeId: HCSO,
-        maxRankOrder: 30,
-        maxPermissionLevel: PermissionLevel.DEPARTMENT_HEAD,
-        targetUser: target,
-      }),
-    ).toThrowError(/at or above your own level/i);
-  });
-
   it('refuses to grant outside the actor scope', () => {
     expect(() =>
       assertCanGrant(granter, {
-        capability: 'roster.promote',
-        scopeType: PermissionScopeType.DEPARTMENT,
-        scopeId: FHP,
-        maxRankOrder: 30,
+        capability: 'grant.issue',
+        scopeType: PermissionScopeType.GUILD,
+        scopeId: FHP_GUILD,
         maxPermissionLevel: PermissionLevel.SUPERVISOR,
         targetUser: target,
       }),
     ).toThrowError();
   });
 
+  it('refuses to grant authority at or above the actor own level', () => {
+    expect(() =>
+      assertCanGrant(granter, {
+        capability: 'grant.issue',
+        scopeType: PermissionScopeType.GUILD,
+        scopeId: HCSO_GUILD,
+        maxPermissionLevel: PermissionLevel.MANAGER,
+        targetUser: target,
+      }),
+    ).toThrowError(/at or above your own level/i);
+  });
+
+  it('refuses to grant an unbounded ceiling when the actor is bounded', () => {
+    expect(() =>
+      assertCanGrant(granter, {
+        capability: 'grant.issue',
+        scopeType: PermissionScopeType.GUILD,
+        scopeId: HCSO_GUILD,
+        targetUser: target,
+      }),
+    ).toThrowError(/authority ceiling of at most/i);
+  });
+
   it('refuses a self grant', () => {
     const error = thrownBy(() =>
       assertCanGrant(granter, {
-        capability: 'roster.promote',
-        scopeType: PermissionScopeType.DEPARTMENT,
-        scopeId: HCSO,
-        maxRankOrder: 30,
-        targetUser: { id: granter.user.id, permissionLevel: PermissionLevel.DEPARTMENT_HEAD },
+        capability: 'grant.issue',
+        scopeType: PermissionScopeType.GUILD,
+        scopeId: HCSO_GUILD,
+        maxPermissionLevel: PermissionLevel.SUPERVISOR,
+        targetUser: { id: granter.user.id, permissionLevel: PermissionLevel.MANAGER },
       }),
     );
     expect(error.code).toBe('SELF_MANAGEMENT');
@@ -435,17 +322,13 @@ describe('privilege escalation through grants', () => {
   it('refuses to re-permission somebody at or above the actor level', () => {
     expect(() =>
       assertCanGrant(granter, {
-        capability: 'roster.promote',
-        scopeType: PermissionScopeType.DEPARTMENT,
-        scopeId: HCSO,
-        maxRankOrder: 30,
-        targetUser: { id: 'user-peer', permissionLevel: PermissionLevel.DEPARTMENT_HEAD },
+        capability: 'grant.issue',
+        scopeType: PermissionScopeType.GUILD,
+        scopeId: HCSO_GUILD,
+        maxPermissionLevel: PermissionLevel.SUPERVISOR,
+        targetUser: { id: 'user-peer', permissionLevel: PermissionLevel.MANAGER },
       }),
     ).toThrowError();
-  });
-
-  it('guild scope filter is unaffected by department grants', () => {
-    expect(departmentScopeFilter(granter, 'permission.grant')).toEqual([HCSO]);
   });
 });
 
@@ -457,29 +340,5 @@ describe('system actor', () => {
       isSystem: true,
     };
     expect(evaluate(system, { capability: 'sync.global' }).allowed).toBe(true);
-  });
-});
-
-describe('guild scope', () => {
-  it('matches a guild-scoped assignment against the resource guild', () => {
-    const guildAdmin = actor({
-      level: PermissionLevel.STAFF,
-      assignments: [
-        assignment({
-          capabilityKey: 'mapping.create',
-          scopeType: PermissionScopeType.GUILD,
-          scopeId: HCSO_GUILD,
-          maxRankOrder: null,
-        }),
-      ],
-    });
-    expect(
-      evaluate(guildAdmin, { capability: 'mapping.create', scope: { guildId: HCSO_GUILD } })
-        .allowed,
-    ).toBe(true);
-    expect(
-      evaluate(guildAdmin, { capability: 'mapping.create', scope: { guildId: 'guild-other' } })
-        .allowed,
-    ).toBe(false);
   });
 });

@@ -2,104 +2,72 @@
  * Community members.
  *
  * The Discord user ID is the external identity, but a member is one platform account
- * with many department memberships - never one account per guild. Linking is a
- * privileged action because a wrong link hands somebody else's roles, rank and history
- * to the wrong Discord account.
+ * spanning every approved guild - never one account per guild. Linking is a privileged
+ * action because a wrong link hands somebody else's roles, grants and history to the
+ * wrong Discord account.
  */
 import { getPrisma, notDeleted } from '@frm/database';
 import { createLogger } from '@frm/logging';
-import {
-  AuditAction,
-  ConflictError,
-  MembershipStatus,
-  NotFoundError,
-  PreconditionError,
-} from '@frm/shared';
+import { AuditAction, ConflictError, NotFoundError, PreconditionError } from '@frm/shared';
 import { authorize } from '@frm/authorization';
 import {
   linkMemberSchema,
+  listMembersSchema,
   memberLookupSchema,
   parseOrThrow,
   unlinkMemberSchema,
 } from '@frm/validation';
+import { currentlyEffective, toPage, toSkipTake } from '@frm/database';
 import { recordAudit } from './audit-service.js';
-import { isSelf, resolveUser } from './resolve.js';
+import { authorizeAnyScope, isSelf, resolveUser } from './resolve.js';
 
 const log = createLogger('core.member');
 
 /**
  * `/member lookup`.
  *
- * Returns the full picture: identities, memberships, certifications, subdivisions,
- * permissions and open synchronization issues.
+ * Returns the full picture: linked Discord accounts, active manual grants, permission
+ * assignments and open synchronization issues.
  */
 export async function lookupMember(ctx, input) {
   const query = parseOrThrow(memberLookupSchema, input);
   const prisma = ctx.prisma ?? getPrisma();
 
-  let user = null;
-  if (query.userId || query.discordUserId) {
-    user = await resolveUser(ctx, query, { required: false });
-  } else if (query.callsign) {
-    const membership = await prisma.departmentMembership.findFirst({
-      where: {
-        callsign: query.callsign,
-        ...notDeleted,
-        status: { not: MembershipStatus.TERMINATED },
-      },
-      include: { user: true },
-    });
-    user = membership?.user ?? null;
-  }
-
-  if (!user)
-    throw new NotFoundError('Member', query.discordUserId ?? query.userId ?? query.callsign);
+  const user = await resolveUser(ctx, query, { required: false });
+  if (!user) throw new NotFoundError('Member', query.discordUserId ?? query.userId);
 
   if (!isSelf(ctx, user.id)) {
-    authorize(ctx.actor, {
-      capability: 'member.view',
-      scope: {},
-      target: { userId: user.id },
-    });
+    authorizeAnyScope(ctx, 'member.view', { target: { userId: user.id } });
   }
 
-  const [identities, memberships, certifications, subdivisions, permissions, openIssues] =
-    await Promise.all([
-      prisma.discordIdentity.findMany({ where: { userId: user.id } }),
-      prisma.departmentMembership.findMany({
-        where: { userId: user.id, ...notDeleted },
-        include: {
-          department: { select: { id: true, key: true, name: true, abbreviation: true } },
-          rank: {
-            select: { id: true, name: true, order: true, isSupervisor: true, isCommand: true },
+  const [identities, grants, permissions, openIssues] = await Promise.all([
+    prisma.discordIdentity.findMany({ where: { userId: user.id } }),
+    prisma.manualRoleGrant.findMany({
+      where: { userId: user.id, ...currentlyEffective() },
+      include: {
+        managedRole: {
+          select: {
+            id: true,
+            name: true,
+            discordRoleId: true,
+            guild: { select: { id: true, name: true } },
           },
         },
-        orderBy: { hireDate: 'asc' },
-      }),
-      prisma.memberCertification.findMany({
-        where: { userId: user.id, revokedAt: null },
-        include: { certification: { select: { id: true, key: true, name: true } } },
-      }),
-      prisma.memberSubdivision.findMany({
-        where: { userId: user.id, leftAt: null },
-        include: {
-          subdivision: { select: { id: true, key: true, name: true, departmentId: true } },
-        },
-      }),
-      prisma.permissionAssignment.findMany({
-        where: { userId: user.id, revokedAt: null },
-        select: {
-          id: true,
-          capabilityKey: true,
-          scopeType: true,
-          scopeId: true,
-          maxRankOrder: true,
-          maxPermissionLevel: true,
-          expiresAt: true,
-        },
-      }),
-      prisma.syncIssue.count({ where: { userId: user.id, resolved: false } }),
-    ]);
+      },
+    }),
+    prisma.permissionAssignment.findMany({
+      where: { userId: user.id, revokedAt: null },
+      select: {
+        id: true,
+        capabilityKey: true,
+        scopeType: true,
+        scopeId: true,
+        maxPermissionLevel: true,
+        expiresAt: true,
+      },
+    }),
+    prisma.syncIssue.count({ where: { userId: user.id, resolved: false } }),
+  ]);
 
   return {
     user: {
@@ -112,12 +80,49 @@ export async function lookupMember(ctx, input) {
       createdAt: user.createdAt,
     },
     identities,
-    memberships,
-    certifications,
-    subdivisions,
+    grants,
     permissions,
     openIssues,
   };
+}
+
+/** Paginated member directory. */
+export async function listMembers(ctx, input = {}) {
+  const query = parseOrThrow(listMembersSchema, input);
+  const prisma = ctx.prisma ?? getPrisma();
+
+  authorizeAnyScope(ctx, 'member.view');
+
+  /** @type {object} */
+  const where = { ...notDeleted };
+  if (typeof query.websiteAccess === 'boolean') where.websiteAccess = query.websiteAccess;
+  if (query.search) {
+    where.OR = [
+      { displayName: { contains: query.search, mode: 'insensitive' } },
+      { primaryDiscordId: { contains: query.search } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      orderBy: { [query.sortBy]: query.sortDir },
+      ...toSkipTake(query),
+      select: {
+        id: true,
+        displayName: true,
+        primaryDiscordId: true,
+        permissionLevel: true,
+        websiteAccess: true,
+        status: true,
+        createdAt: true,
+        _count: { select: { manualGrants: true, permissions: true } },
+      },
+    }),
+    prisma.user.count({ where }),
+  ]);
+
+  return toPage(items, total, query);
 }
 
 /**
@@ -201,9 +206,9 @@ export async function linkMember(ctx, input) {
 /**
  * `/member unlink`.
  *
- * Refuses to remove the last identity of a member who is still on a roster: an active
- * member with no Discord account cannot be synchronized, and the resulting state is
- * confusing to debug later.
+ * Refuses to remove the last identity of a member who still holds active grants: a
+ * member with no Discord account cannot be synchronized, so the grant would sit there
+ * doing nothing, which is confusing to debug later.
  */
 export async function unlinkMember(ctx, input) {
   const data = parseOrThrow(unlinkMemberSchema, input);
@@ -217,21 +222,17 @@ export async function unlinkMember(ctx, input) {
   });
   if (!identity) throw new NotFoundError('Discord identity', data.discordUserId);
 
-  const [identityCount, activeMemberships] = await Promise.all([
+  const [identityCount, activeGrants] = await Promise.all([
     prisma.discordIdentity.count({ where: { userId: identity.userId } }),
-    prisma.departmentMembership.count({
-      where: {
-        userId: identity.userId,
-        ...notDeleted,
-        status: { not: MembershipStatus.TERMINATED },
-      },
+    prisma.manualRoleGrant.count({
+      where: { userId: identity.userId, ...currentlyEffective() },
     }),
   ]);
 
-  if (identityCount === 1 && activeMemberships > 0) {
+  if (identityCount === 1 && activeGrants > 0) {
     throw new PreconditionError(
-      'That is the only Discord account linked to a member who is still on a roster. ' +
-        'Remove them from their rosters first, or link a replacement account.',
+      'That is the only Discord account linked to a member who still holds active role grants. ' +
+        'Revoke the grants first, or link a replacement account.',
     );
   }
 

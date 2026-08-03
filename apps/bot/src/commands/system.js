@@ -58,7 +58,6 @@ export async function execute(interaction, { ctx, gateway }) {
             name: 'Platform',
             value: [
               `Guilds: ${health.counts.guilds}`,
-              `Departments: ${health.counts.departments}`,
               `Members: ${health.counts.members}`,
               `Mappings: ${health.counts.enabledMappings}/${health.counts.mappings} enabled`,
               `Managed roles: ${health.counts.managedRoles}`,

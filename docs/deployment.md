@@ -98,12 +98,13 @@ it:
 
 1. Deploy with `SYNC_DRY_RUN_DEFAULT=true`. Every job plans and records but changes
    nothing.
-2. Register the guilds, create the departments, ranks and managed roles.
+2. Register the guilds, declare the managed roles with `/role manage`, then create the
+   mappings — disabled at first.
 3. Run `/resync preview member:<someone>` and read the plan. Confirm the adds and removals
    are what you expect.
-4. Run `/resync preview department:<one department>` and check the totals — particularly
-   the removal count.
-5. Turn `SYNC_DRY_RUN_DEFAULT` off. Synchronize one member, then one department.
+4. Enable one mapping, run `/resync preview guild:<one guild>` and check the totals —
+   particularly the removal count.
+5. Turn `SYNC_DRY_RUN_DEFAULT` off. Synchronize one member, then one guild.
 6. Lower `SYNC_MAX_REMOVALS_THRESHOLD` while you build confidence; a paused job is a
    nuisance, an unintended mass removal is an incident.
 7. Leave scheduled reconciliation running. It is what keeps drift from accumulating.

@@ -1,10 +1,10 @@
 /**
  * BullMQ queue definitions.
  *
- * Three queues so that a long department resync cannot starve a single retried role
+ * Three queues so that a long guild-wide resync cannot starve a single retried role
  * write, and so maintenance sweeps run on their own schedule:
  *
- *   - `frm-sync`         member/department/guild/global resyncs and roster changes
+ *   - `frm-sync`         member, guild and global resyncs, and grant changes
  *   - `frm-role-action`  individual retryable role writes
  *   - `frm-maintenance`  scheduled reconciliation and mapping validation
  *
@@ -21,10 +21,9 @@ const log = createLogger('queue');
 /** Job names, kept separate from SyncJobType so queue routing is explicit. */
 export const JobName = Object.freeze({
   MEMBER_RESYNC: 'member-resync',
-  DEPARTMENT_RESYNC: 'department-resync',
   GUILD_RESYNC: 'guild-resync',
   GLOBAL_RESYNC: 'global-resync',
-  ROSTER_CHANGE: 'roster-change',
+  GRANT_CHANGE: 'grant-change',
   MAPPING_PROPAGATION: 'mapping-propagation',
   ROLE_ACTION_RETRY: 'role-action-retry',
   SCHEDULED_RECONCILIATION: 'scheduled-reconciliation',
@@ -34,10 +33,9 @@ export const JobName = Object.freeze({
 /** Which queue each job name belongs to. */
 const QUEUE_FOR_JOB = Object.freeze({
   [JobName.MEMBER_RESYNC]: QUEUE_NAMES.SYNC,
-  [JobName.DEPARTMENT_RESYNC]: QUEUE_NAMES.SYNC,
   [JobName.GUILD_RESYNC]: QUEUE_NAMES.SYNC,
   [JobName.GLOBAL_RESYNC]: QUEUE_NAMES.SYNC,
-  [JobName.ROSTER_CHANGE]: QUEUE_NAMES.SYNC,
+  [JobName.GRANT_CHANGE]: QUEUE_NAMES.SYNC,
   [JobName.MAPPING_PROPAGATION]: QUEUE_NAMES.SYNC,
   [JobName.ROLE_ACTION_RETRY]: QUEUE_NAMES.ROLE_ACTION,
   [JobName.SCHEDULED_RECONCILIATION]: QUEUE_NAMES.MAINTENANCE,
@@ -47,10 +45,9 @@ const QUEUE_FOR_JOB = Object.freeze({
 /** Maps a SyncJobType onto the job name that processes it. */
 export const JOB_NAME_FOR_TYPE = Object.freeze({
   [SyncJobType.MEMBER_RESYNC]: JobName.MEMBER_RESYNC,
-  [SyncJobType.DEPARTMENT_RESYNC]: JobName.DEPARTMENT_RESYNC,
   [SyncJobType.GUILD_RESYNC]: JobName.GUILD_RESYNC,
   [SyncJobType.GLOBAL_RESYNC]: JobName.GLOBAL_RESYNC,
-  [SyncJobType.ROSTER_CHANGE]: JobName.ROSTER_CHANGE,
+  [SyncJobType.GRANT_CHANGE]: JobName.GRANT_CHANGE,
   [SyncJobType.MAPPING_PROPAGATION]: JobName.MAPPING_PROPAGATION,
   [SyncJobType.ROLE_ADD]: JobName.ROLE_ACTION_RETRY,
   [SyncJobType.ROLE_REMOVE]: JobName.ROLE_ACTION_RETRY,

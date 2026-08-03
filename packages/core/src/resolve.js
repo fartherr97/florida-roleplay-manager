@@ -1,14 +1,15 @@
 /**
- * Identifier resolution.
+ * Identifier resolution and scope helpers.
  *
  * This is the layer that stops insecure direct object references. Every identifier that
  * arrives from a slash command or an HTTP request is resolved to a real row here, and
- * the row's own scope (its department, its guild) is what the authorization check then
- * runs against. Nothing downstream ever trusts a caller-supplied scope.
+ * the row's own scope (its guild) is what the authorization check then runs against.
+ * Nothing downstream ever trusts a caller-supplied scope.
  */
 import { getPrisma, notDeleted } from '@frm/database';
+import { authorize, guildScopeFilter } from '@frm/authorization';
 import {
-  ConflictError,
+  AuthorizationError,
   GuildNotApprovedError,
   NotFoundError,
   PreconditionError,
@@ -38,7 +39,7 @@ export async function resolveUser(ctx, { userId, discordUserId }, { required = t
 
 /**
  * Resolves a member, creating the platform account if the Discord user has never been
- * seen before. Used by hire and link, both of which require `member.link`-level trust
+ * seen before. Used by grant issuing and linking, both of which require elevated trust
  * from the caller (checked by the calling service before this runs).
  *
  * @param {import('./context.js').ServiceContext} ctx
@@ -66,40 +67,27 @@ export async function resolveOrCreateUser(ctx, target, client) {
 }
 
 /** @param {import('./context.js').ServiceContext} ctx */
-export async function resolveDepartment(ctx, departmentId) {
-  const prisma = ctx.prisma ?? getPrisma();
-  const department = await prisma.department.findFirst({
-    where: { id: departmentId, ...notDeleted },
-  });
-  if (!department) throw new NotFoundError('Department', departmentId);
-  if (!department.enabled) {
-    throw new PreconditionError(`${department.name} is currently disabled.`);
-  }
-  return department;
-}
-
-/**
- * Resolves a rank and verifies it belongs to the department being acted on.
- *
- * Without the department check, a caller could pass a rank id from a different
- * department and quietly move somebody onto a rank their command staff do not control.
- */
-export async function resolveRank(ctx, rankId, departmentId) {
-  const prisma = ctx.prisma ?? getPrisma();
-  const rank = await prisma.rank.findFirst({ where: { id: rankId, ...notDeleted } });
-  if (!rank) throw new NotFoundError('Rank', rankId);
-  if (departmentId && rank.departmentId !== departmentId) {
-    throw new ConflictError('That rank belongs to a different department.');
-  }
-  return rank;
-}
-
-/** @param {import('./context.js').ServiceContext} ctx */
 export async function resolveApprovedGuild(ctx, guildId) {
   const prisma = ctx.prisma ?? getPrisma();
   const guild = await prisma.approvedGuild.findFirst({ where: { id: guildId, ...notDeleted } });
   if (!guild) throw new NotFoundError('Guild', guildId);
   return guild;
+}
+
+/**
+ * Resolves a managed role together with the guild it belongs to, so the caller can
+ * authorize against that guild rather than a caller-supplied one.
+ *
+ * @param {import('./context.js').ServiceContext} ctx
+ */
+export async function resolveManagedRole(ctx, managedRoleId) {
+  const prisma = ctx.prisma ?? getPrisma();
+  const managedRole = await prisma.managedRole.findFirst({
+    where: { id: managedRoleId, ...notDeleted },
+    include: { guild: true },
+  });
+  if (!managedRole) throw new NotFoundError('Managed role', managedRoleId);
+  return managedRole;
 }
 
 /**
@@ -136,36 +124,12 @@ export async function requireApprovedGuild(discordGuildId, { requireSync = false
 }
 
 /**
- * Resolves the membership a roster action targets, with everything the authorization
- * check and the audit record need.
- *
- * @param {import('./context.js').ServiceContext} ctx
- * @param {{userId: string, departmentId: string}} params
- * @param {{required?: boolean}} [options]
- */
-export async function resolveMembership(ctx, { userId, departmentId }, { required = true } = {}) {
-  const prisma = ctx.prisma ?? getPrisma();
-  const membership = await prisma.departmentMembership.findFirst({
-    where: { userId, departmentId, ...notDeleted },
-    include: {
-      user: true,
-      rank: true,
-      department: true,
-    },
-  });
-  if (!membership && required) {
-    throw new NotFoundError('Membership', `${userId}/${departmentId}`);
-  }
-  return membership;
-}
-
-/**
  * Is this actor acting on their own record?
  *
- * Reading your own profile, history or certifications never requires a capability: a
- * member with no grants at all must still be able to see their own record. Everything
- * that *changes* a record still goes through the full authorization check, and the
- * self-management rule separately forbids acting on yourself.
+ * Reading your own profile or grants never requires a capability: a member with no
+ * grants at all must still be able to see their own record. Everything that *changes* a
+ * record still goes through the full authorization check, and the self-management rule
+ * separately forbids acting on yourself.
  *
  * @param {import('./context.js').ServiceContext} ctx
  * @param {string} userId
@@ -175,20 +139,41 @@ export function isSelf(ctx, userId) {
 }
 
 /**
- * Builds the authorization target descriptor for a roster action.
+ * Authorizes an action that has no single guild to check against.
  *
- * Both the current and the resulting rank are included so the rank ceiling is checked
- * in both directions: you may not demote somebody who is above your ceiling, and you
- * may not promote somebody past it either.
+ * Two shapes need this: an action about a *member* (whose roles span every approved
+ * guild) and a *listing* (which spans whatever the actor can see). A global holder is
+ * allowed outright; a guild-scoped holder is allowed if the capability covers at least
+ * one approved guild.
  *
- * @param {object} membership
- * @param {{order: number}} [resultingRank]
+ * For listings this is only half the story — the caller must still narrow the query
+ * with `guildScopeFilter`, which is what stops a guild-scoped holder from reading
+ * another guild's rows. For member actions it is sufficient on its own, because
+ * reconciliation only ever applies the state the platform itself computed: an actor can
+ * influence *when* it runs, never *what* it does.
+ *
+ * @param {import('./context.js').ServiceContext} ctx
+ * @param {string} capability
+ * @param {object} [options]
  */
-export function rosterTarget(membership, resultingRank) {
-  return {
-    userId: membership.userId,
-    permissionLevel: membership.user.permissionLevel,
-    currentRankOrder: membership.rank.order,
-    resultingRankOrder: resultingRank ? resultingRank.order : membership.rank.order,
-  };
+export function authorizeAnyScope(ctx, capability, { target = {}, allowSelf = false } = {}) {
+  const guildIds = guildScopeFilter(ctx.actor, capability);
+
+  if (guildIds === null) {
+    return authorize(ctx.actor, { capability, scope: {}, target, allowSelf });
+  }
+
+  let lastError = null;
+  for (const guildId of guildIds) {
+    try {
+      return authorize(ctx.actor, { capability, scope: { guildId }, target, allowSelf });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw (
+    lastError ??
+    new AuthorizationError(`You do not have the ${capability} permission.`, { capability })
+  );
 }

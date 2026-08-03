@@ -37,18 +37,18 @@ The Discord account has no member record. Somebody with `member.link` runs:
 ### "You do not have the … permission"
 
 The message names the capability. `/permissions view member:@them` shows what they hold and
-in which scope. Common causes: the grant is department-scoped and the action targets a
-different department, or their authority level is below the capability's minimum.
+in which scope. Common causes: the grant is guild-scoped and the action targets a different
+guild, or their authority level is below the capability's minimum.
 
 ---
 
 ## Synchronization
 
-### Nothing happens when I promote somebody
+### Nothing happens when I grant a role or change a mapping
 
 Work through it in this order:
 
-1. `/resync status job_id:<id>` — the job id is in the promotion's reply. Was it created?
+1. `/resync status job_id:<id>` — the job id is in the reply to the command. Was it created?
 2. Is the **worker** running? The bot never writes roles itself. `/system health` shows
    queue depth; jobs piling up in `waiting` means no worker is consuming them.
 3. Is `SYNC_DRY_RUN_DEFAULT=true`? Then every job plans and records without applying.
@@ -73,16 +73,28 @@ by anybody — the platform refuses them at mapping time.
 
 ### Roles keep coming back after somebody removes them
 
-Working as designed. Roster-authoritative roles are restored by the next reconciliation: a
-manual Discord change never permanently overrides roster data. Change the roster (promote,
-demote, remove from the roster), or change the role's purpose if it should not be
-roster-driven.
+Working as designed, and there are only two things that can cause it.
+
+- **A mapping.** The member still holds the source role, and the mapping is authoritative,
+  so the next reconciliation restores the target. Remove the source role, or change the
+  mapping's authority.
+- **A manual grant.** `/role grants member:@them` lists them. Revoke it with
+  `/role revoke`; the role comes off on the next reconciliation.
+
+If neither applies, the role is not the platform's — check `/role list` to confirm it has
+no managed role definition at all.
+
+### Roles keep disappearing after somebody adds them
+
+The mirror image: an authoritative mapping with removal switched on computes the correct
+value of that role as "absent". Either give the member the source role, add a manual grant
+(if the role's purpose is `MANUAL_GRANT`), or switch the mapping's `syncRemove` off so the
+platform stops treating the role as removable.
 
 ### A member is missing from a guild
 
-Reported as a warning, not a failure. Their roles are applied in the guilds they _are_ in.
-The daily drift sweep records roster members who are missing from their department's
-server.
+Reported as a warning, not a failure. Their roles are applied in the guilds they _are_ in,
+and nothing is retried against a guild they are not in.
 
 ### Two-way mapping seems one-way
 
@@ -140,9 +152,9 @@ the session was created before the cookie was set — sign in again.
 Existing data conflicts with a new constraint. Find the duplicates before retrying:
 
 ```sql
-SELECT callsign, department_id, count(*)
-FROM department_memberships
-WHERE deleted_at IS NULL AND callsign IS NOT NULL
+SELECT approved_guild_id, discord_role_id, count(*)
+FROM managed_roles
+WHERE deleted_at IS NULL
 GROUP BY 1, 2 HAVING count(*) > 1;
 ```
 

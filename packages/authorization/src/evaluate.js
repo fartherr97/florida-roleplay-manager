@@ -11,14 +11,12 @@
  *   2. they hold the capability
  *   3. an assignment's scope covers the resource
  *   4. their permission level meets the capability's minimum
- *   5. the target's rank is within the assignment's rank ceiling (before AND after)
- *   6. the target's authority level is below the actor's own
- *   7. the action is not self-directed (unless explicitly allowed)
+ *   5. the target's authority level is below the actor's own
+ *   6. the action is not self-directed (unless explicitly allowed)
  */
 import {
   AuthorizationError,
   PermissionScopeType,
-  RankCeilingError,
   SelfManagementError,
   UserStatus,
   getCapability,
@@ -31,7 +29,6 @@ export const DenialReason = Object.freeze({
   MISSING_CAPABILITY: 'MISSING_CAPABILITY',
   OUT_OF_SCOPE: 'OUT_OF_SCOPE',
   LEVEL_TOO_LOW: 'LEVEL_TOO_LOW',
-  RANK_CEILING: 'RANK_CEILING',
   LEVEL_CEILING: 'LEVEL_CEILING',
   SELF_MANAGEMENT: 'SELF_MANAGEMENT',
 });
@@ -43,7 +40,6 @@ export const DenialReason = Object.freeze({
 const REASON_PRIORITY = [
   DenialReason.SELF_MANAGEMENT,
   DenialReason.LEVEL_CEILING,
-  DenialReason.RANK_CEILING,
   DenialReason.OUT_OF_SCOPE,
   DenialReason.LEVEL_TOO_LOW,
   DenialReason.MISSING_CAPABILITY,
@@ -61,19 +57,14 @@ const REASON_PRIORITY = [
  * @property {string} capabilityKey
  * @property {string} scopeType
  * @property {string} scopeId empty string for GLOBAL
- * @property {number|null} maxRankOrder
  * @property {number|null} maxPermissionLevel
  *
  * @typedef {object} ResourceScope
  * @property {string} [guildId] internal ApprovedGuild id
- * @property {string} [departmentId]
- * @property {string} [subdivisionId]
  *
  * @typedef {object} TargetDescriptor
  * @property {string} [userId]
  * @property {number} [permissionLevel]
- * @property {number} [currentRankOrder] rank the target holds now
- * @property {number} [resultingRankOrder] rank the target would hold after the action
  *
  * @typedef {object} Requirement
  * @property {string} capability
@@ -91,9 +82,8 @@ const REASON_PRIORITY = [
 /**
  * Does an assignment's scope cover the resource being acted on?
  *
- * A GLOBAL assignment covers everything. A DEPARTMENT assignment covers actions on
- * that department (and, when the caller supplies it, that department's guild, because
- * the caller resolves a department guild to its department before evaluating).
+ * A GLOBAL assignment covers everything. A GUILD assignment covers only actions on
+ * that specific approved guild.
  *
  * @param {AssignmentSnapshot} assignment
  * @param {ResourceScope} scope
@@ -104,10 +94,6 @@ export function scopeCovers(assignment, scope = {}) {
       return true;
     case PermissionScopeType.GUILD:
       return Boolean(scope.guildId) && assignment.scopeId === scope.guildId;
-    case PermissionScopeType.DEPARTMENT:
-      return Boolean(scope.departmentId) && assignment.scopeId === scope.departmentId;
-    case PermissionScopeType.SUBDIVISION:
-      return Boolean(scope.subdivisionId) && assignment.scopeId === scope.subdivisionId;
     default:
       return false;
   }
@@ -144,7 +130,7 @@ export function evaluate(actor, requirement) {
   }
 
   // Self-management is checked before anything else: no combination of grants lets a
-  // user promote, suspend or re-permission themselves.
+  // user re-permission themselves.
   if (!allowSelf && target.userId && target.userId === actor.user.id) {
     return deny(DenialReason.SELF_MANAGEMENT, `You cannot use ${capability} on your own record.`);
   }
@@ -162,7 +148,7 @@ export function evaluate(actor, requirement) {
   }
 
   // A user may never act on somebody at or above their own authority level. This is
-  // what stops a department head from demoting a global administrator.
+  // what stops a guild administrator from demoting a global administrator.
   if (
     typeof target.permissionLevel === 'number' &&
     target.permissionLevel >= actor.user.permissionLevel
@@ -190,46 +176,24 @@ export function evaluate(actor, requirement) {
     if (!scopeCovers(assignment, scope)) {
       bestFailure = worse(
         bestFailure,
-        deny(
-          DenialReason.OUT_OF_SCOPE,
-          `You do not have ${capability} for this department or guild.`,
-        ),
+        deny(DenialReason.OUT_OF_SCOPE, `You do not have ${capability} for this guild.`),
       );
       continue;
     }
 
-    if (typeof assignment.maxPermissionLevel === 'number') {
-      if (
-        typeof target.permissionLevel === 'number' &&
-        target.permissionLevel > assignment.maxPermissionLevel
-      ) {
-        bestFailure = worse(
-          bestFailure,
-          deny(
-            DenialReason.LEVEL_CEILING,
-            'That member is above the maximum authority level you may manage.',
-          ),
-        );
-        continue;
-      }
-    }
-
-    if (typeof assignment.maxRankOrder === 'number') {
-      const ranks = [target.currentRankOrder, target.resultingRankOrder].filter(
-        (value) => typeof value === 'number',
+    if (
+      typeof assignment.maxPermissionLevel === 'number' &&
+      typeof target.permissionLevel === 'number' &&
+      target.permissionLevel > assignment.maxPermissionLevel
+    ) {
+      bestFailure = worse(
+        bestFailure,
+        deny(
+          DenialReason.LEVEL_CEILING,
+          'That member is above the maximum authority level you may manage.',
+        ),
       );
-      const exceeding = ranks.find((order) => order > assignment.maxRankOrder);
-      if (exceeding !== undefined) {
-        bestFailure = worse(
-          bestFailure,
-          deny(
-            DenialReason.RANK_CEILING,
-            'That rank is above the maximum rank you are allowed to manage.',
-            { maxRankOrder: assignment.maxRankOrder, attemptedRankOrder: exceeding },
-          ),
-        );
-        continue;
-      }
+      continue;
     }
 
     return { allowed: true, assignment };
@@ -255,14 +219,10 @@ export function authorize(actor, requirement) {
     ...decision.details,
   };
 
-  switch (decision.reason) {
-    case DenialReason.SELF_MANAGEMENT:
-      throw new SelfManagementError(requirement.capability);
-    case DenialReason.RANK_CEILING:
-      throw new RankCeilingError(decision.message, details);
-    default:
-      throw new AuthorizationError(decision.message, details);
+  if (decision.reason === DenialReason.SELF_MANAGEMENT) {
+    throw new SelfManagementError(requirement.capability);
   }
+  throw new AuthorizationError(decision.message, details);
 }
 
 /**
@@ -280,25 +240,10 @@ export function hasCapabilityAnywhere(actor, capability) {
 }
 
 /**
- * The department ids an actor may act on with a capability, or `null` meaning "all"
- * when they hold it globally. Used to constrain list queries so a department head only
- * ever sees their own rosters.
+ * The guild ids an actor may act on with a capability, or `null` meaning "all" when
+ * they hold it globally. Used to constrain list queries so a guild-scoped
+ * administrator only ever sees their own guilds.
  *
- * @param {ActorSnapshot} actor
- * @param {string} capability
- * @returns {string[]|null}
- */
-export function departmentScopeFilter(actor, capability) {
-  if (actor?.isSystem) return null;
-  const assignments = (actor?.assignments ?? []).filter((a) => a.capabilityKey === capability);
-  if (assignments.some((a) => a.scopeType === PermissionScopeType.GLOBAL)) return null;
-  return assignments
-    .filter((a) => a.scopeType === PermissionScopeType.DEPARTMENT)
-    .map((a) => a.scopeId);
-}
-
-/**
- * The guild ids an actor may act on with a capability, or `null` for all.
  * @param {ActorSnapshot} actor
  * @param {string} capability
  * @returns {string[]|null}

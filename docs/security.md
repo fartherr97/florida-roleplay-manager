@@ -33,14 +33,13 @@ An actor is allowed only when all of these hold:
 2. they hold the capability;
 3. an assignment's scope covers the resolved resource;
 4. their authority level meets the capability's minimum;
-5. the target's rank is within the assignment's ceiling — checked **before and after** the
-   change, so you cannot demote somebody above your ceiling either;
+5. the target's authority level is within the assignment's ceiling;
 6. the target's authority level is strictly below the actor's own;
 7. the action is not self-directed.
 
 Granting is bounded the same way: you cannot grant a capability you do not hold, in a scope
-wider than yours, with a rank ceiling above yours, or with an authority ceiling at or above
-your own level. An actor whose own grant is bounded cannot issue an unbounded one.
+wider than yours, or with an authority ceiling at or above your own level. An actor whose
+own grant is bounded cannot issue an unbounded one.
 
 Reading your own record is exempt — a member with no grants can still see their own
 profile — but every _change_ goes through the full check.
@@ -48,30 +47,30 @@ profile — but every _change_ goes through the full check.
 ## Preventing IDOR
 
 Identifiers from a slash command or an HTTP body are never treated as authority. Each one
-is resolved to a real row, and the row's own department or guild is what the authorization
-check runs against. A caller can send any department id they like; what they get back is a
-403 unless their assignment covers _that_ department.
+is resolved to a real row, and the row's own guild is what the authorization check runs
+against. A caller can send any guild id, managed role id or mapping id they like; what they
+get back is a 403 unless their assignment covers _that_ guild.
 
 Related: sort fields are validated against an allowlist, so a client cannot order by (and
 thereby infer) a column it is not permitted to read, and page sizes are capped server side.
 
 ## Ordering: authorize before you explain
 
-Domain validation runs _after_ authorization. An actor with no access to a department is
-told they lack permission — not that "Sergeant is not above Lieutenant", which would leak
-that department's rank structure.
+Domain validation runs _after_ authorization. An actor with no access to a guild is told
+they lack permission — not that "that role is managed by another integration", which would
+leak the guild's role configuration.
 
 ## Mass-change protection
 
 - **Maximum-change threshold.** A job planning more removals than the configured limit
   pauses, records what it intended to do, raises a critical issue and alerts
   administrators. Nothing is applied.
-- **Previews and confirmation.** Department, guild and global resyncs run a dry run first
-  and show real numbers before asking.
+- **Previews and confirmation.** Guild and global resyncs run a dry run first and show real
+  numbers before asking.
 - **Removal is restricted to computable roles.** The engine removes only roles whose
-  correct value it can derive — from roster data, a manual grant, or an authoritative
-  mapping. A member's own community roles are never touched, and a Discord account with no
-  roster record has only its mapped roles managed.
+  correct value it can derive — from a manual grant, or from an authoritative mapping with
+  removal switched on. A member's own community roles are never touched, and a Discord
+  account with no platform record has only its mapped roles managed.
 
 ## Protected roles
 
@@ -111,12 +110,12 @@ outright at every level.
 ## Audit trail
 
 Every significant action writes an immutable record: actor (platform and Discord id),
-action, source (Discord / website / system / scheduled), target, department, guild, mapping,
-sync job, before and after state, reason, request id, IP address for website actions,
-success or failure, and error details.
+action, source (Discord / website / system / scheduled), target, guild, mapping, sync job,
+before and after state, reason, request id, IP address for website actions, success or
+failure, and error details.
 
 Denied actions are audited too — a trail of only successes cannot answer "who keeps trying
-to promote themselves?".
+to grant themselves permissions?".
 
 No service method updates or deletes an audit row. Enforce it in the database as well:
 

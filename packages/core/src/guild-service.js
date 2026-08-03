@@ -23,9 +23,9 @@ import {
 import { recordAudit } from './audit-service.js';
 import { notifyGlobalAdmins } from './notify.js';
 import {
+  authorizeAnyScope,
   findApprovedGuildBySnowflake,
   resolveApprovedGuild,
-  resolveDepartment,
 } from './resolve.js';
 
 const log = createLogger('core.guild');
@@ -38,7 +38,6 @@ function guildState(guild) {
     discordGuildId: guild.discordGuildId,
     name: guild.name,
     type: guild.type,
-    departmentId: guild.departmentId,
     enabled: guild.enabled,
     syncEnabled: guild.syncEnabled,
     features: guild.features,
@@ -48,7 +47,7 @@ function guildState(guild) {
 /** `/guild list` and `GET /api/guilds`. */
 export async function listGuilds(ctx, input = {}) {
   const query = parseOrThrow(listGuildsSchema, input);
-  authorize(ctx.actor, { capability: 'guild.view', scope: {} });
+  authorizeAnyScope(ctx, 'guild.view');
 
   const prisma = ctx.prisma ?? getPrisma();
   const allowedGuilds = guildScopeFilter(ctx.actor, 'guild.view');
@@ -73,7 +72,6 @@ export async function listGuilds(ctx, input = {}) {
       orderBy: { [query.sortBy]: query.sortDir },
       ...toSkipTake(query),
       include: {
-        department: { select: { id: true, key: true, name: true } },
         _count: { select: { managedRoles: true, sourceMappings: true, targetMappings: true } },
       },
     }),
@@ -122,16 +120,6 @@ export async function registerGuild(ctx, input, { gateway } = {}) {
     );
   }
 
-  if (data.departmentId) {
-    await resolveDepartment(ctx, data.departmentId);
-    const taken = await prisma.approvedGuild.findFirst({
-      where: { departmentId: data.departmentId, ...notDeleted },
-    });
-    if (taken && taken.discordGuildId !== data.discordGuildId) {
-      throw new ConflictError(`That department is already linked to ${taken.name}.`);
-    }
-  }
-
   const existing = await prisma.approvedGuild.findUnique({
     where: { discordGuildId: data.discordGuildId },
   });
@@ -150,7 +138,6 @@ export async function registerGuild(ctx, input, { gateway } = {}) {
           data: {
             name: liveGuild?.name ?? data.name,
             type: data.type,
-            departmentId: data.departmentId ?? null,
             enabled: true,
             syncEnabled,
             features: data.features,
@@ -166,7 +153,6 @@ export async function registerGuild(ctx, input, { gateway } = {}) {
             discordGuildId: data.discordGuildId,
             name: liveGuild?.name ?? data.name,
             type: data.type,
-            departmentId: data.departmentId ?? null,
             enabled: true,
             syncEnabled,
             features: data.features,
@@ -178,7 +164,6 @@ export async function registerGuild(ctx, input, { gateway } = {}) {
       ctx,
       action: AuditAction.GUILD_REGISTERED,
       approvedGuildId: row.id,
-      departmentId: row.departmentId,
       reason: data.reason,
       previousState: guildState(existing),
       newState: guildState(row),
@@ -234,7 +219,6 @@ export async function removeGuild(ctx, input) {
       ctx,
       action: AuditAction.GUILD_REMOVED,
       approvedGuildId: guild.id,
-      departmentId: guild.departmentId,
       reason: data.reason,
       previousState: guildState(guild),
       newState: { ...guildState(row), disabledMappings: disabled.count },
@@ -253,18 +237,7 @@ export async function updateGuildSettings(ctx, input) {
   const prisma = ctx.prisma ?? getPrisma();
   const guild = await resolveApprovedGuild(ctx, data.guildId);
 
-  authorize(ctx.actor, {
-    capability: 'guild.settings',
-    scope: { guildId: guild.id, departmentId: guild.departmentId ?? undefined },
-  });
-
-  if (data.departmentId) {
-    await resolveDepartment(ctx, data.departmentId);
-    const taken = await prisma.approvedGuild.findFirst({
-      where: { departmentId: data.departmentId, id: { not: guild.id }, ...notDeleted },
-    });
-    if (taken) throw new ConflictError(`That department is already linked to ${taken.name}.`);
-  }
+  authorize(ctx.actor, { capability: 'guild.settings', scope: { guildId: guild.id } });
 
   const updated = await prisma.$transaction(async (tx) => {
     const row = await tx.approvedGuild.update({
@@ -273,7 +246,6 @@ export async function updateGuildSettings(ctx, input) {
         name: data.name ?? undefined,
         enabled: typeof data.enabled === 'boolean' ? data.enabled : undefined,
         syncEnabled: typeof data.syncEnabled === 'boolean' ? data.syncEnabled : undefined,
-        departmentId: data.departmentId === undefined ? undefined : data.departmentId,
         features: data.features ?? undefined,
       },
     });
@@ -281,7 +253,6 @@ export async function updateGuildSettings(ctx, input) {
       ctx,
       action: AuditAction.GUILD_SETTINGS_UPDATED,
       approvedGuildId: guild.id,
-      departmentId: row.departmentId,
       reason: data.reason,
       previousState: guildState(guild),
       newState: guildState(row),
@@ -304,10 +275,7 @@ export async function getGuildStatus(ctx, { guildId }, { gateway } = {}) {
   const prisma = ctx.prisma ?? getPrisma();
   const guild = await resolveApprovedGuild(ctx, guildId);
 
-  authorize(ctx.actor, {
-    capability: 'guild.view',
-    scope: { guildId: guild.id, departmentId: guild.departmentId ?? undefined },
-  });
+  authorize(ctx.actor, { capability: 'guild.view', scope: { guildId: guild.id } });
 
   const [managedRoles, mappingCount, openIssues] = await Promise.all([
     prisma.managedRole.findMany({

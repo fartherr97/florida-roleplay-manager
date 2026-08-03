@@ -11,8 +11,6 @@ import * as shared from '@frm/shared';
 const PAIRS = [
   ['GuildType', shared.GuildType],
   ['UserStatus', shared.UserStatus],
-  ['MembershipStatus', shared.MembershipStatus],
-  ['MembershipEventType', shared.MembershipEventType],
   ['MappingDirection', shared.MappingDirection],
   ['AuthoritySource', shared.AuthoritySource],
   ['RolePurpose', shared.RolePurpose],

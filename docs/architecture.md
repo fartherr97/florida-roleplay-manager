@@ -22,7 +22,7 @@ translate between their own input format and a service call.
 ```
 
 Why the bot does not write roles: Discord gives an interaction three seconds to be
-acknowledged. A department resync touching four hundred members cannot happen inside that
+acknowledged. A guild resync touching four hundred members cannot happen inside that
 budget, and an interaction handler that blocks on it produces "the application did not
 respond" while still half-applying changes. The bot creates a job; the worker does the
 work; the bot reports on it.
@@ -60,14 +60,13 @@ HTTP request:
 
 1. **Validate** the input with Zod — again, server side, regardless of what the caller
    claims to have validated.
-2. **Resolve** every identifier to a real row. A caller-supplied department id is never
-   treated as a scope; it is looked up, and the row's own identity is what gets authorized.
-3. **Authorize**: capability, scope, rank ceiling, authority ceiling, self-management rule.
-4. **Check domain preconditions** — a promotion must go up, a suspended member cannot be
-   suspended again. This runs _after_ authorization so that an unauthorized caller learns
-   nothing about the data.
-5. **Write** the row change, the membership event, the audit record and the sync job in a
-   single transaction.
+2. **Resolve** every identifier to a real row. A caller-supplied guild id is never treated
+   as a scope; it is looked up, and the row's own identity is what gets authorized.
+3. **Authorize**: capability, scope, authority ceiling, self-management rule.
+4. **Check domain preconditions** — a grant may only target a role whose purpose is
+   `MANUAL_GRANT`, a mapping may not close a cycle. This runs _after_ authorization so that
+   an unauthorized caller learns nothing about the data.
+5. **Write** the row change, the audit record and the sync job in a single transaction.
 6. **Enqueue** after the commit. A queue is not transactional; a job that ran before its
    data was visible would reconcile against stale state.
 7. **Report** partial or full failure honestly, including when the enqueue itself failed.
@@ -78,32 +77,32 @@ HTTP request:
 desired state  −  actual state  =  required changes
 ```
 
-**Desired state** is computed from roster data (memberships, ranks, supervisor/command
-flags, certifications, subdivisions, LOA/suspension status), manual time-bounded grants,
-and enabled mappings.
+**Desired state** is computed from two sources only: manual time-bounded grants, and
+enabled mappings.
 
 **Controlled state** is the set of roles the platform is allowed to _remove_. This is the
 important half. A role is controlled only when the engine can compute its correct value:
 
-- a managed role whose purpose is roster-driven (membership, rank, supervisor, command,
-  certification, subdivision, status), or
-- a managed role granted by an explicit manual grant, or
+- a managed role whose purpose is `MANUAL_GRANT` — the correct value is "does an active
+  grant exist?", which is always computable — or
 - the target of an enabled, authoritative mapping with removal sync switched on.
 
 Everything else is left alone forever. A community member's cosmetic, notification and
 interest roles are not the platform's business, and a role of purpose `OTHER` is
 deliberately never removable.
 
+A Discord account with no platform record is evaluated against mappings only. It cannot
+hold a grant, so grant-driven roles are not computable for it and are never removed.
+
 **Authority rules** for mappings:
 
-| Direction | Authority       | Behaviour                                             |
-| --------- | --------------- | ----------------------------------------------------- |
-| ONE_WAY   | SOURCE_DISCORD  | target mirrors the source                             |
-| ONE_WAY   | TARGET_DISCORD  | source mirrors the target                             |
-| ONE_WAY   | ROSTER          | target mirrors the roster-derived value of the source |
-| TWO_WAY   | SOURCE_DISCORD  | source wins; the target is corrected to match         |
-| TWO_WAY   | TARGET_DISCORD  | target wins; the source is corrected to match         |
-| TWO_WAY   | MANUAL / SYSTEM | union for additions; reconciliation never removes     |
+| Direction | Authority       | Behaviour                                         |
+| --------- | --------------- | ------------------------------------------------- |
+| ONE_WAY   | SOURCE_DISCORD  | target mirrors the source                         |
+| ONE_WAY   | TARGET_DISCORD  | source mirrors the target                         |
+| TWO_WAY   | SOURCE_DISCORD  | source wins; the target is corrected to match     |
+| TWO_WAY   | TARGET_DISCORD  | target wins; the source is corrected to match     |
+| TWO_WAY   | MANUAL / SYSTEM | union for additions; reconciliation never removes |
 
 The union rule for authority-less two-way mappings exists because "both sides are equal"
 has no deterministic answer when they disagree. Picking one arbitrarily would make the
@@ -153,8 +152,8 @@ only loops built from two or more distinct mappings are refused.
 - **Maximum-change threshold.** A job that would remove more roles than the configured
   limit pauses, records the planned actions, raises a critical issue and alerts
   administrators. Nothing is applied.
-- **Previews.** Department, guild and global resyncs run a dry run first and show the real
-  numbers before asking for confirmation.
+- **Previews.** Guild and global resyncs run a dry run first and show the real numbers
+  before asking for confirmation.
 - **Dry run.** The same code path as a real run, with the Discord write skipped and actions
   recorded as `DRY_RUN`.
 - **Production fails closed.** `DEV_MODE` and `DISCORD_MOCK` are forced off when
@@ -162,11 +161,12 @@ only loops built from two or more distinct mappings are refused.
 
 ## Sources of truth
 
-| Data                                                                                                 | Authority                                 |
-| ---------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| Department membership, rank, command status, callsign, certifications, subdivisions, LOA, suspension | Roster (the database)                     |
-| Notification, event, interest and cosmetic roles                                                     | Discord, via mappings — or nothing at all |
-| Temporary sensitive access, investigation access, event assignments                                  | Manual grants, time-bounded               |
+| Data                                                                | Authority                                 |
+| ------------------------------------------------------------------- | ----------------------------------------- |
+| Membership, notification, event, interest and cosmetic roles        | Discord, via mappings — or nothing at all |
+| Temporary sensitive access, investigation access, event assignments | Manual grants, time-bounded               |
+| Which Discord roles the platform may touch at all                   | Managed role definitions (the database)   |
 
-When the two disagree, the configured authority decides. For roster-authoritative roles
-that means a manual Discord change is reverted on the next reconciliation, by design.
+When the two sides of a mapping disagree, the configured authority decides. On an
+authoritative mapping that means a manual Discord change to the non-authoritative side is
+reverted on the next reconciliation, by design.

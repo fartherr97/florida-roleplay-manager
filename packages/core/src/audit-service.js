@@ -12,8 +12,9 @@
 import { getPrisma, toPage, toSkipTake } from '@frm/database';
 import { createLogger } from '@frm/logging';
 import { ActionSource, AuthorizationError, PAGINATION } from '@frm/shared';
-import { authorize, departmentScopeFilter } from '@frm/authorization';
+import { authorize, guildScopeFilter } from '@frm/authorization';
 import { auditQuerySchema, parseOrThrow } from '@frm/validation';
+import { authorizeAnyScope } from './resolve.js';
 
 const log = createLogger('core.audit');
 
@@ -21,7 +22,7 @@ const log = createLogger('core.audit');
  * Writes one audit record.
  *
  * Accepts a transaction client so the audit row commits atomically with the change it
- * describes: a roster change that succeeded without its audit record, or an audit
+ * describes: a mapping change that succeeded without its audit record, or an audit
  * record for a change that rolled back, would both be worse than useless.
  *
  * @param {import('@prisma/client').Prisma.TransactionClient} client
@@ -30,7 +31,6 @@ const log = createLogger('core.audit');
  * @param {string} entry.action one of AuditAction
  * @param {string} [entry.targetUserId]
  * @param {string} [entry.targetDiscordId]
- * @param {string} [entry.departmentId]
  * @param {string} [entry.approvedGuildId]
  * @param {string} [entry.mappingId]
  * @param {string} [entry.syncJobId]
@@ -52,7 +52,6 @@ export async function recordAudit(client, entry) {
       actorDiscordId: ctx.actor?.discordUserId ?? null,
       targetUserId: entry.targetUserId ?? null,
       targetDiscordId: entry.targetDiscordId ?? null,
-      departmentId: entry.departmentId ?? null,
       approvedGuildId: entry.approvedGuildId ?? null,
       mappingId: entry.mappingId ?? null,
       syncJobId: entry.syncJobId ?? null,
@@ -73,7 +72,7 @@ export async function recordAudit(client, entry) {
  * Records a failed attempt.
  *
  * Denied actions are audited too: an audit trail that only contains successes cannot
- * answer "who has been trying to promote themselves?".
+ * answer "who keeps trying to map a role they do not control?".
  */
 export async function recordFailure(ctx, { action, error, ...rest }) {
   try {
@@ -95,8 +94,8 @@ export async function recordFailure(ctx, { action, error, ...rest }) {
 /**
  * Reads audit records, constrained to what the actor is allowed to see.
  *
- * A department-scoped `audit.view` holder only ever sees records for their own
- * departments; the filter is applied server side and cannot be widened by the caller.
+ * A guild-scoped `audit.view` holder only ever sees records for their own guilds; the
+ * filter is applied server side and cannot be widened by the caller.
  *
  * @param {import('./context.js').ServiceContext} ctx
  * @param {object} input
@@ -104,15 +103,13 @@ export async function recordFailure(ctx, { action, error, ...rest }) {
 export async function queryAuditLogs(ctx, input) {
   const query = parseOrThrow(auditQuerySchema, input);
 
-  authorize(ctx.actor, {
-    capability: 'audit.view',
-    scope: {
-      departmentId: query.departmentId,
-      guildId: query.guildId,
-    },
-  });
+  if (query.guildId) {
+    authorize(ctx.actor, { capability: 'audit.view', scope: { guildId: query.guildId } });
+  } else {
+    authorizeAnyScope(ctx, 'audit.view');
+  }
 
-  const allowedDepartments = departmentScopeFilter(ctx.actor, 'audit.view');
+  const allowedGuilds = guildScopeFilter(ctx.actor, 'audit.view');
 
   /** @type {object} */
   const where = {};
@@ -124,23 +121,22 @@ export async function queryAuditLogs(ctx, input) {
   if (query.syncJobId) where.syncJobId = query.syncJobId;
   if (query.action) where.action = query.action;
   if (typeof query.success === 'boolean') where.success = query.success;
-  if (query.guildId) where.approvedGuildId = query.guildId;
   if (query.from || query.to) {
     where.createdAt = {};
     if (query.from) where.createdAt.gte = query.from;
     if (query.to) where.createdAt.lte = query.to;
   }
 
-  if (allowedDepartments !== null) {
-    if (allowedDepartments.length === 0) {
-      throw new AuthorizationError('You do not have audit access to any department.');
+  if (allowedGuilds !== null) {
+    if (allowedGuilds.length === 0) {
+      throw new AuthorizationError('You do not have audit access to any guild.');
     }
-    // Records with no department (global actions) are only visible to global holders.
-    where.departmentId = query.departmentId
-      ? assertWithin(query.departmentId, allowedDepartments)
-      : { in: allowedDepartments };
-  } else if (query.departmentId) {
-    where.departmentId = query.departmentId;
+    // Records with no guild (platform-wide actions) are only visible to global holders.
+    where.approvedGuildId = query.guildId
+      ? assertWithin(query.guildId, allowedGuilds)
+      : { in: allowedGuilds };
+  } else if (query.guildId) {
+    where.approvedGuildId = query.guildId;
   }
 
   const prisma = ctx.prisma ?? getPrisma();
@@ -157,7 +153,6 @@ export async function queryAuditLogs(ctx, input) {
         actorDiscordId: true,
         targetUserId: true,
         targetDiscordId: true,
-        departmentId: true,
         approvedGuildId: true,
         mappingId: true,
         syncJobId: true,
@@ -202,14 +197,14 @@ export async function auditForMapping(ctx, { mappingId, page = 1, pageSize = 10 
  * mean "read everything".
  */
 export async function exportAuditLogs(ctx, input) {
-  authorize(ctx.actor, { capability: 'audit.export', scope: {} });
+  authorizeAnyScope(ctx, 'audit.export');
   const page = await queryAuditLogs(ctx, { ...input, pageSize: PAGINATION.MAX_PAGE_SIZE });
   return page;
 }
 
 function assertWithin(value, allowed) {
   if (!allowed.includes(value)) {
-    throw new AuthorizationError('You do not have audit access to that department.');
+    throw new AuthorizationError('You do not have audit access to that guild.');
   }
   return value;
 }

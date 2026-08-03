@@ -184,7 +184,7 @@ async function handleRemove(interaction, ctx) {
     title: 'Remove this server from the allowlist?',
     description:
       'Every mapping involving this server will be disabled and no further synchronization ' +
-      'will happen there. Roster data is not deleted.',
+      'will happen there. Nothing is removed from Discord.',
     confirmLabel: 'Remove server',
   });
   if (!confirmed) return undefined;

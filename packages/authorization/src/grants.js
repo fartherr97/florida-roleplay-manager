@@ -6,7 +6,6 @@
  *
  *   - You cannot grant a capability you do not hold yourself.
  *   - You cannot grant it in a scope wider than your own.
- *   - You cannot grant a rank ceiling higher than your own.
  *   - You cannot grant an authority ceiling at or above your own level.
  *   - You cannot grant anything to yourself.
  *   - You cannot modify the permissions of somebody at or above your own level.
@@ -26,19 +25,11 @@ import { authorize, scopeCovers } from './evaluate.js';
  * @param {string} request.capability capability being granted
  * @param {string} request.scopeType
  * @param {string} request.scopeId empty string for GLOBAL
- * @param {number|null} [request.maxRankOrder]
  * @param {number|null} [request.maxPermissionLevel]
  * @param {{id: string, permissionLevel: number}} request.targetUser
  */
 export function assertCanGrant(actor, request) {
-  const {
-    capability,
-    scopeType,
-    scopeId = '',
-    maxRankOrder,
-    maxPermissionLevel,
-    targetUser,
-  } = request;
+  const { capability, scopeType, scopeId = '', maxPermissionLevel, targetUser } = request;
 
   const definition = getCapability(capability);
   if (!definition) {
@@ -89,16 +80,6 @@ export function assertCanGrant(actor, request) {
 
   // Ceilings may only ever narrow. `null` on the actor's side means "unlimited within
   // my scope", so only a numeric actor ceiling constrains the grant.
-  if (typeof maxRankOrder === 'number') {
-    const bestRankCeiling = ceilingOf(covering, 'maxRankOrder');
-    if (bestRankCeiling !== null && maxRankOrder > bestRankCeiling) {
-      throw new AuthorizationError(
-        `You cannot grant a rank ceiling above your own (${bestRankCeiling}).`,
-        { requested: maxRankOrder, allowed: bestRankCeiling },
-      );
-    }
-  }
-
   const bestLevelCeiling = ceilingOf(covering, 'maxPermissionLevel');
   if (typeof maxPermissionLevel === 'number') {
     if (maxPermissionLevel >= actor.user.permissionLevel) {
@@ -113,23 +94,18 @@ export function assertCanGrant(actor, request) {
         { requested: maxPermissionLevel, allowed: bestLevelCeiling },
       );
     }
-  }
-
-  // Holding the capability is not enough to hand out an unbounded grant when the
-  // granter is themselves bounded.
-  if (maxRankOrder === undefined || maxRankOrder === null) {
-    const bestRankCeiling = ceilingOf(covering, 'maxRankOrder');
-    if (bestRankCeiling !== null) {
-      throw new ValidationError(
-        `You must specify a rank ceiling of at most ${bestRankCeiling}, because your own grant is limited.`,
-      );
-    }
+  } else if (bestLevelCeiling !== null) {
+    // Holding the capability is not enough to hand out an unbounded grant when the
+    // granter is themselves bounded.
+    throw new ValidationError(
+      `You must specify an authority ceiling of at most ${bestLevelCeiling}, because your own grant is limited.`,
+    );
   }
 }
 
 /**
  * Revoking is authorized like granting: same scope, same level ceiling. Without this a
- * department head could strip a global administrator's permissions.
+ * guild administrator could strip a global administrator's permissions.
  *
  * @param {import('./evaluate.js').ActorSnapshot} actor
  * @param {{capabilityKey: string, scopeType: string, scopeId: string, user: {id: string, permissionLevel: number}}} assignment
@@ -148,16 +124,7 @@ export function assertCanRevoke(actor, assignment) {
 
 /** Maps a stored scope tuple onto the resource shape the evaluator expects. */
 export function scopeToResource(scopeType, scopeId) {
-  switch (scopeType) {
-    case PermissionScopeType.GUILD:
-      return { guildId: scopeId };
-    case PermissionScopeType.DEPARTMENT:
-      return { departmentId: scopeId };
-    case PermissionScopeType.SUBDIVISION:
-      return { subdivisionId: scopeId };
-    default:
-      return {};
-  }
+  return scopeType === PermissionScopeType.GUILD ? { guildId: scopeId } : {};
 }
 
 /**

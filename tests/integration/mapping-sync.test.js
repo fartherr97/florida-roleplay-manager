@@ -12,6 +12,7 @@ import {
   createSyncJob,
   discordContext,
   handleMemberRoleChange,
+  issueGrant,
   runSyncJob,
   systemContext,
 } from '@frm/core';
@@ -80,6 +81,24 @@ describe.skipIf(!available)('mapping propagation', () => {
     return mapping;
   }
 
+  /** The department mapping: the community role in the main guild drives HCSO. */
+  async function createMemberMapping() {
+    const { mapping } = await createMapping(
+      adminCtx,
+      {
+        name: 'HCSO member sync',
+        sourceGuildId: IDS.MAIN_GUILD,
+        sourceRoleId: IDS.R_MAIN_HCSO_MEMBER,
+        targetGuildId: IDS.HCSO_GUILD,
+        targetRoleId: IDS.R_HCSO_MEMBER,
+        enabled: true,
+        reason: 'link the community role to the department role',
+      },
+      { gateway },
+    );
+    return mapping;
+  }
+
   /** Runs the pending propagation job created by an event. */
   async function runJob(jobId) {
     return runSyncJob({ jobId, gateway, prisma });
@@ -90,12 +109,12 @@ describe.skipIf(!available)('mapping propagation', () => {
   it('propagates a manual role addition across a mapping', async () => {
     await createMediaMapping();
 
-    // A human gives the deputy the Media Team role in the main guild.
-    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_DEPUTY, roleIds: [IDS.R_MAIN_MEDIA] });
+    // A human gives the member the Media Team role in the main guild.
+    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_MEMBER, roleIds: [IDS.R_MAIN_MEDIA] });
 
     const result = await handleMemberRoleChange({
       discordGuildId: IDS.MAIN_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [IDS.R_MAIN_MEDIA],
       removedRoleIds: [],
       executorDiscordId: IDS.D_ADMIN,
@@ -105,30 +124,30 @@ describe.skipIf(!available)('mapping propagation', () => {
     expect(result.queued).toBe(true);
 
     await runJob(result.jobId);
-    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_DEPUTY)).toContain(IDS.R_HCSO_MEDIA);
+    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_MEMBER)).toContain(IDS.R_HCSO_MEDIA);
   });
 
   it('ignores the echo of its own change, which is what breaks the loop', async () => {
     await createMediaMapping();
-    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_DEPUTY, roleIds: [IDS.R_MAIN_MEDIA] });
+    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_MEMBER, roleIds: [IDS.R_MAIN_MEDIA] });
 
     // Round 1: the human change propagates into the HCSO guild.
     const first = await handleMemberRoleChange({
       discordGuildId: IDS.MAIN_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [IDS.R_MAIN_MEDIA],
       removedRoleIds: [],
       prisma,
     });
     await runJob(first.jobId);
-    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_DEPUTY)).toContain(IDS.R_HCSO_MEDIA);
+    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_MEMBER)).toContain(IDS.R_HCSO_MEDIA);
 
     // Round 2: Discord now emits the event for the change the bot just made. Without
     // loop protection this would propagate back to the main guild, and round-trip
     // forever.
     const echo = await handleMemberRoleChange({
       discordGuildId: IDS.HCSO_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [IDS.R_HCSO_MEDIA],
       removedRoleIds: [],
       prisma,
@@ -141,11 +160,11 @@ describe.skipIf(!available)('mapping propagation', () => {
 
   it('treats a genuine change in the target guild as human, once the marker is spent', async () => {
     await createMediaMapping();
-    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_DEPUTY, roleIds: [IDS.R_MAIN_MEDIA] });
+    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_MEMBER, roleIds: [IDS.R_MAIN_MEDIA] });
 
     const first = await handleMemberRoleChange({
       discordGuildId: IDS.MAIN_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [IDS.R_MAIN_MEDIA],
       removedRoleIds: [],
       prisma,
@@ -155,7 +174,7 @@ describe.skipIf(!available)('mapping propagation', () => {
     // The echo consumes the marker...
     await handleMemberRoleChange({
       discordGuildId: IDS.HCSO_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [IDS.R_HCSO_MEDIA],
       removedRoleIds: [],
       prisma,
@@ -164,7 +183,7 @@ describe.skipIf(!available)('mapping propagation', () => {
     // ...so a later, genuine removal by a human is recognised as such.
     const human = await handleMemberRoleChange({
       discordGuildId: IDS.HCSO_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [],
       removedRoleIds: [IDS.R_HCSO_MEDIA],
       prisma,
@@ -178,7 +197,7 @@ describe.skipIf(!available)('mapping propagation', () => {
 
     const result = await handleMemberRoleChange({
       discordGuildId: IDS.HCSO_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [IDS.R_UNMANAGED],
       removedRoleIds: [],
       prisma,
@@ -191,7 +210,7 @@ describe.skipIf(!available)('mapping propagation', () => {
   it('ignores every change in a guild that is not approved', async () => {
     const result = await handleMemberRoleChange({
       discordGuildId: '888888888888888888',
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [IDS.R_MAIN_MEDIA],
       removedRoleIds: [],
       prisma,
@@ -209,7 +228,7 @@ describe.skipIf(!available)('mapping propagation', () => {
 
     const result = await handleMemberRoleChange({
       discordGuildId: IDS.MAIN_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [IDS.R_MAIN_HCSO_MEMBER],
       removedRoleIds: [],
       prisma,
@@ -222,10 +241,10 @@ describe.skipIf(!available)('mapping propagation', () => {
   it('records who made a manual change when Discord tells us', async () => {
     const result = await handleMemberRoleChange({
       discordGuildId: IDS.HCSO_GUILD,
-      discordUserId: IDS.D_DEPUTY,
-      addedRoleIds: [IDS.R_HCSO_SERGEANT],
+      discordUserId: IDS.D_MEMBER,
+      addedRoleIds: [IDS.R_HCSO_MEMBER],
       removedRoleIds: [],
-      executorDiscordId: IDS.D_SHERIFF,
+      executorDiscordId: IDS.D_GUILD_ADMIN,
       prisma,
     });
 
@@ -234,26 +253,21 @@ describe.skipIf(!available)('mapping propagation', () => {
       where: { syncJobId: result.jobId },
       orderBy: { createdAt: 'desc' },
     });
-    expect(audit.newState.executorDiscordId).toBe(IDS.D_SHERIFF);
-    expect(audit.actorDiscordId).toBe(IDS.D_SHERIFF);
+    expect(audit.newState.executorDiscordId).toBe(IDS.D_GUILD_ADMIN);
+    expect(audit.actorDiscordId).toBe(IDS.D_GUILD_ADMIN);
   });
 
-  it('reverts a manual rank change, because roster data is authoritative', async () => {
-    // Give the deputy their correct roles first.
-    const setup = await createSyncJob(prisma, systemContext({ label: 'test' }), {
-      type: SyncJobType.MEMBER_RESYNC,
-      targetUserId: fixtures.users.deputy.id,
-      payload: { userId: fixtures.users.deputy.id },
-    });
-    await runJob(setup.id);
+  it('reverts a manual addition of a mapped role, because the source guild decides', async () => {
+    await createMemberMapping();
 
-    // A supervisor hands out the Sergeant role by hand.
-    await gateway.addRole(IDS.HCSO_GUILD, IDS.D_DEPUTY, IDS.R_HCSO_SERGEANT, 'manual');
+    // A supervisor hands out the department role directly in HCSO, without the member
+    // having the community role that drives it.
+    await gateway.addRole(IDS.HCSO_GUILD, IDS.D_MEMBER, IDS.R_HCSO_MEMBER, 'manual');
 
     const result = await handleMemberRoleChange({
       discordGuildId: IDS.HCSO_GUILD,
-      discordUserId: IDS.D_DEPUTY,
-      addedRoleIds: [IDS.R_HCSO_SERGEANT],
+      discordUserId: IDS.D_MEMBER,
+      addedRoleIds: [IDS.R_HCSO_MEMBER],
       removedRoleIds: [],
       prisma,
     });
@@ -261,19 +275,18 @@ describe.skipIf(!available)('mapping propagation', () => {
 
     await runJob(result.jobId);
 
-    // The next reconciliation takes it straight back off: a manual Discord change never
-    // permanently overrides a roster-authoritative rank.
-    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_DEPUTY)).not.toContain(IDS.R_HCSO_SERGEANT);
-    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_DEPUTY)).toContain(IDS.R_HCSO_DEPUTY);
+    // The next reconciliation takes it straight back off: an authoritative mapping can
+    // compute the correct value of that role, and the correct value is "absent".
+    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_MEMBER)).not.toContain(IDS.R_HCSO_MEMBER);
   });
 
-  it('propagates for a Discord account with no roster record, without touching its other roles', async () => {
+  it('propagates for an unlinked Discord account, without touching what it cannot compute', async () => {
     await createMediaMapping();
 
-    // An unlinked community member holds a department role they should not have, plus
-    // the mapped media role.
+    // A community member with no platform record holds the mapped media role's source,
+    // plus a role that only a manual grant could ever justify.
     gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_UNLINKED, roleIds: [IDS.R_MAIN_MEDIA] });
-    gateway.defineMember(IDS.HCSO_GUILD, { id: IDS.D_UNLINKED, roleIds: [IDS.R_HCSO_DEPUTY] });
+    gateway.defineMember(IDS.HCSO_GUILD, { id: IDS.D_UNLINKED, roleIds: [IDS.R_GRANTABLE] });
 
     const result = await handleMemberRoleChange({
       discordGuildId: IDS.MAIN_GUILD,
@@ -284,27 +297,30 @@ describe.skipIf(!available)('mapping propagation', () => {
     });
     expect(result.queued).toBe(true);
 
+    const job = await prisma.syncJob.findUnique({ where: { id: result.jobId } });
+    expect(job.type).toBe(SyncJobType.MAPPING_PROPAGATION);
+
     await runJob(result.jobId);
 
     // The mapping applied...
     expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_UNLINKED)).toContain(IDS.R_HCSO_MEDIA);
-    // ...and the rank role was left alone, because with no roster record the engine
-    // cannot compute whether it is correct, and never removes what it cannot compute.
-    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_UNLINKED)).toContain(IDS.R_HCSO_DEPUTY);
+    // ...and the grant-driven role was left alone. With no platform record the engine
+    // cannot know whether a grant justifies it, and never removes what it cannot compute.
+    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_UNLINKED)).toContain(IDS.R_GRANTABLE);
   });
 
   it('propagates a removal when the mapping says to', async () => {
     await createMediaMapping(MappingDirection.ONE_WAY, AuthoritySource.SOURCE_DISCORD);
 
-    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_DEPUTY, roleIds: [IDS.R_MAIN_MEDIA] });
-    gateway.defineMember(IDS.HCSO_GUILD, { id: IDS.D_DEPUTY, roleIds: [IDS.R_HCSO_MEDIA] });
+    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_MEMBER, roleIds: [IDS.R_MAIN_MEDIA] });
+    gateway.defineMember(IDS.HCSO_GUILD, { id: IDS.D_MEMBER, roleIds: [IDS.R_HCSO_MEDIA] });
 
     // The source role is taken away by a human.
-    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_DEPUTY, roleIds: [] });
+    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_MEMBER, roleIds: [] });
 
     const result = await handleMemberRoleChange({
       discordGuildId: IDS.MAIN_GUILD,
-      discordUserId: IDS.D_DEPUTY,
+      discordUserId: IDS.D_MEMBER,
       addedRoleIds: [],
       removedRoleIds: [IDS.R_MAIN_MEDIA],
       prisma,
@@ -312,6 +328,45 @@ describe.skipIf(!available)('mapping propagation', () => {
     expect(result.queued).toBe(true);
 
     await runJob(result.jobId);
-    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_DEPUTY)).not.toContain(IDS.R_HCSO_MEDIA);
+    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_MEMBER)).not.toContain(IDS.R_HCSO_MEDIA);
+  });
+
+  it('keeps a granted role that a mapping would otherwise remove, and records the conflict', async () => {
+    // The grantable role is also the target of a mapping nobody satisfies.
+    await createMapping(
+      adminCtx,
+      {
+        name: 'Investigation access via community role',
+        sourceGuildId: IDS.MAIN_GUILD,
+        sourceRoleId: IDS.R_MAIN_MEDIA,
+        targetGuildId: IDS.HCSO_GUILD,
+        targetRoleId: IDS.R_GRANTABLE,
+        enabled: true,
+        reason: 'community shortcut',
+      },
+      { gateway },
+    );
+
+    await issueGrant(adminCtx, {
+      discordUserId: IDS.D_MEMBER,
+      managedRoleId: fixtures.managedRoles.grantable.id,
+      reason: 'active investigation',
+    });
+
+    const job = await createSyncJob(prisma, systemContext({ label: 'test' }), {
+      type: SyncJobType.MEMBER_RESYNC,
+      targetUserId: fixtures.users.member.id,
+      payload: { userId: fixtures.users.member.id },
+    });
+    await runJob(job.id);
+
+    // The grant wins outright...
+    expect(gateway.rolesOf(IDS.HCSO_GUILD, IDS.D_MEMBER)).toContain(IDS.R_GRANTABLE);
+    // ...and the disagreement is surfaced rather than silently resolved.
+    const issue = await prisma.syncIssue.findFirst({
+      where: { syncJobId: job.id, type: 'MAPPING_CONFLICT' },
+    });
+    expect(issue).not.toBeNull();
+    expect(issue.message).toMatch(/grant wins/i);
   });
 });

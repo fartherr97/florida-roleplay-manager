@@ -2,23 +2,24 @@
  * Core service behaviour against a real database.
  *
  * These cover the rules that only exist once the pieces are wired together: allowlist
- * enforcement, department scoping, rank ceilings, transactional audit records, and
- * mapping validation.
+ * enforcement, guild scoping, transactional audit records, mapping validation and the
+ * manual grant lifecycle.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   createMapping,
   discordContext,
-  hireMember,
+  grantPermission,
   isGuildApproved,
+  issueGrant,
   listGuilds,
-  promoteMember,
+  listManagedRoles,
   registerGuild,
   removeGuild,
   requireApprovedGuild,
-  grantPermission,
+  revokeGrant,
   setMappingEnabled,
-  suspendMember,
+  upsertManagedRole,
 } from '@frm/core';
 import { loadActorByDiscordId } from '@frm/authorization';
 import { closeQueues, closeRedis } from '@frm/queue';
@@ -27,8 +28,8 @@ import {
   AuthoritySource,
   GuildType,
   MappingDirection,
-  MembershipStatus,
   PermissionScopeType,
+  RolePurpose,
 } from '@frm/shared';
 import { isPostgresAvailable, isRedisAvailable } from '../helpers/services.js';
 import {
@@ -46,11 +47,7 @@ describe.skipIf(!available)('core services', () => {
   let fixtures;
   let gateway;
   let adminCtx;
-  let sheriffCtx;
-
-  beforeAll(async () => {
-    await resetDatabase();
-  });
+  let guildAdminCtx;
 
   beforeEach(async () => {
     await resetDatabase();
@@ -59,7 +56,7 @@ describe.skipIf(!available)('core services', () => {
     adminCtx = discordContext(await loadActorByDiscordId(IDS.D_ADMIN), {
       discordGuildId: IDS.MAIN_GUILD,
     });
-    sheriffCtx = discordContext(await loadActorByDiscordId(IDS.D_SHERIFF), {
+    guildAdminCtx = discordContext(await loadActorByDiscordId(IDS.D_GUILD_ADMIN), {
       discordGuildId: IDS.HCSO_GUILD,
     });
   });
@@ -95,7 +92,7 @@ describe.skipIf(!available)('core services', () => {
     it('refuses registration by somebody without guild.register', async () => {
       await expect(
         registerGuild(
-          sheriffCtx,
+          guildAdminCtx,
           {
             discordGuildId: '888888888888888888',
             name: 'Random Server',
@@ -123,15 +120,15 @@ describe.skipIf(!available)('core services', () => {
     });
 
     it('registers a guild the bot is in and audits it', async () => {
-      gateway.defineGuild({ id: '888888888888888888', name: 'New Department' });
+      gateway.defineGuild({ id: '888888888888888888', name: 'New Server' });
 
       const { guild } = await registerGuild(
         adminCtx,
         {
           discordGuildId: '888888888888888888',
-          name: 'New Department',
+          name: 'New Server',
           type: GuildType.DEPARTMENT,
-          reason: 'onboarding a new department',
+          reason: 'onboarding a new server',
         },
         { gateway },
       );
@@ -143,7 +140,7 @@ describe.skipIf(!available)('core services', () => {
       });
       expect(audit).not.toBeNull();
       expect(audit.actorUserId).toBe(fixtures.users.admin.id);
-      expect(audit.reason).toBe('onboarding a new department');
+      expect(audit.reason).toBe('onboarding a new server');
     });
 
     it('disables every mapping when a guild is removed', async () => {
@@ -160,7 +157,7 @@ describe.skipIf(!available)('core services', () => {
 
       const result = await removeGuild(adminCtx, {
         guildId: fixtures.guilds.hcsoGuild.id,
-        reason: 'department closed',
+        reason: 'server closed',
       });
 
       expect(result.disabledMappings).toBe(1);
@@ -170,150 +167,171 @@ describe.skipIf(!available)('core services', () => {
     });
 
     it('only lists guilds the actor may see', async () => {
-      const page = await listGuilds(adminCtx, {});
-      expect(page.items.length).toBe(3);
+      expect((await listGuilds(adminCtx, {})).items).toHaveLength(3);
+
+      // The guild administrator's grants are scoped to one guild.
+      const scoped = await listGuilds(guildAdminCtx, {});
+      expect(scoped.items).toHaveLength(1);
+      expect(scoped.items[0].discordGuildId).toBe(IDS.HCSO_GUILD);
     });
   });
 
   // -------------------------------------------------------------------------
-  describe('roster actions and scoping', () => {
-    it('lets the sheriff promote their own deputy', async () => {
-      const result = await promoteMember(sheriffCtx, {
-        departmentId: fixtures.departments.hcso.id,
-        discordUserId: IDS.D_DEPUTY,
-        rankId: fixtures.ranks.corporal.id,
-        reason: 'earned it',
-      });
+  describe('managed roles', () => {
+    it('declares a role as managed and audits it', async () => {
+      const managed = await upsertManagedRole(
+        guildAdminCtx,
+        {
+          guildId: fixtures.guilds.hcsoGuild.id,
+          discordRoleId: IDS.R_UNMANAGED,
+          name: 'Gaming Nights',
+          purpose: RolePurpose.MANUAL_GRANT,
+          reason: 'grantable community role',
+        },
+        { gateway },
+      );
 
-      expect(result.membership.rankId).toBe(fixtures.ranks.corporal.id);
-
+      expect(managed.purpose).toBe(RolePurpose.MANUAL_GRANT);
       const audit = await testPrisma().auditLog.findFirst({
-        where: { action: 'roster.promoted', targetUserId: fixtures.users.deputy.id },
+        where: { action: 'managed_role.upserted' },
       });
       expect(audit).not.toBeNull();
-      expect(audit.previousState.rankName).toBe('Deputy');
-      expect(audit.newState.rankName).toBe('Corporal');
-
-      // The membership event and the sync job are written in the same transaction.
-      const event = await testPrisma().membershipEvent.findFirst({
-        where: { membershipId: fixtures.memberships.deputy.id, type: 'PROMOTED' },
-      });
-      expect(event).not.toBeNull();
-      expect(result.syncJob.type).toBe('ROSTER_CHANGE');
     });
 
-    it('refuses a promotion above the rank ceiling', async () => {
+    it('refuses a role in a guild the actor does not administer', async () => {
       await expect(
-        promoteMember(sheriffCtx, {
-          departmentId: fixtures.departments.hcso.id,
-          discordUserId: IDS.D_DEPUTY,
-          rankId: fixtures.ranks.colonel.id, // above the Major ceiling
-          reason: 'too far',
-        }),
-      ).rejects.toThrow(/above the maximum rank/i);
+        upsertManagedRole(
+          guildAdminCtx,
+          {
+            guildId: fixtures.guilds.fhpGuild.id,
+            discordRoleId: IDS.R_FHP_MEMBER,
+            name: 'Department Member',
+            reason: 'outside my guild',
+          },
+          { gateway },
+        ),
+      ).rejects.toThrow(/do not have role.manage/i);
     });
 
-    it('refuses acting on another department', async () => {
+    it('refuses a role that does not exist in Discord', async () => {
       await expect(
-        promoteMember(sheriffCtx, {
-          departmentId: fixtures.departments.fhp.id,
-          discordUserId: IDS.D_TROOPER,
-          rankId: fixtures.ranks.trooper.id,
-          reason: 'not mine to give',
-        }),
-      ).rejects.toThrow(/do not have roster.promote/i);
+        upsertManagedRole(
+          adminCtx,
+          {
+            guildId: fixtures.guilds.hcsoGuild.id,
+            discordRoleId: '888888888888888888',
+            name: 'Ghost role',
+            reason: 'typo in the snowflake',
+          },
+          { gateway },
+        ),
+      ).rejects.toThrow(/not found/i);
     });
 
-    it('refuses a promotion that is not upwards', async () => {
-      await promoteMember(sheriffCtx, {
-        departmentId: fixtures.departments.hcso.id,
-        discordUserId: IDS.D_DEPUTY,
-        rankId: fixtures.ranks.sergeant.id,
-        reason: 'first promotion',
+    it('refuses an integration-owned role', async () => {
+      await expect(
+        upsertManagedRole(
+          adminCtx,
+          {
+            guildId: fixtures.guilds.hcsoGuild.id,
+            discordRoleId: IDS.R_INTEGRATION,
+            name: 'Server Booster',
+            reason: 'cannot be managed',
+          },
+          { gateway },
+        ),
+      ).rejects.toThrow(/another integration/i);
+    });
+
+    it('scopes the listing to the actor guilds', async () => {
+      const page = await listManagedRoles(guildAdminCtx, {});
+      expect(page.items.every((role) => role.guild.discordGuildId === IDS.HCSO_GUILD)).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('manual grants', () => {
+    it('issues a grant and queues the synchronization', async () => {
+      const result = await issueGrant(guildAdminCtx, {
+        discordUserId: IDS.D_MEMBER,
+        managedRoleId: fixtures.managedRoles.grantable.id,
+        reason: 'temporary investigation access',
+      });
+
+      expect(result.grant.revokedAt).toBeNull();
+      expect(result.syncJob.type).toBe('GRANT_CHANGE');
+
+      const audit = await testPrisma().auditLog.findFirst({ where: { action: 'grant.issued' } });
+      expect(audit).not.toBeNull();
+      expect(audit.syncJobId).toBe(result.syncJob.id);
+    });
+
+    it('refuses to grant a mapping-driven role', async () => {
+      // Granting a role that reconciliation computes from a mapping would be undone on
+      // the next pass, which is a deeply confusing thing to debug.
+      await expect(
+        issueGrant(guildAdminCtx, {
+          discordUserId: IDS.D_MEMBER,
+          managedRoleId: fixtures.managedRoles.hcsoMember.id,
+          reason: 'wrong kind of role',
+        }),
+      ).rejects.toThrow(/MANUAL_GRANT/);
+    });
+
+    it('refuses a duplicate active grant', async () => {
+      const input = {
+        discordUserId: IDS.D_MEMBER,
+        managedRoleId: fixtures.managedRoles.grantable.id,
+        reason: 'first grant',
+      };
+      await issueGrant(guildAdminCtx, input);
+      await expect(issueGrant(guildAdminCtx, input)).rejects.toThrow(/already holds/i);
+    });
+
+    it('refuses a grant for a guild the actor does not administer', async () => {
+      const fhpRole = await testPrisma().managedRole.create({
+        data: {
+          approvedGuildId: fixtures.guilds.fhpGuild.id,
+          discordRoleId: '920000000000000077',
+          name: 'FHP Special Access',
+          purpose: RolePurpose.MANUAL_GRANT,
+        },
       });
 
       await expect(
-        promoteMember(sheriffCtx, {
-          departmentId: fixtures.departments.hcso.id,
-          discordUserId: IDS.D_DEPUTY,
-          rankId: fixtures.ranks.corporal.id,
-          reason: 'wrong direction',
+        issueGrant(guildAdminCtx, {
+          discordUserId: IDS.D_MEMBER,
+          managedRoleId: fhpRole.id,
+          reason: 'outside my guild',
         }),
-      ).rejects.toThrow(/not above/i);
+      ).rejects.toThrow(/do not have grant.issue/i);
     });
 
-    it('refuses to let somebody promote themselves', async () => {
-      await hireMember(adminCtx, {
-        departmentId: fixtures.departments.hcso.id,
-        discordUserId: IDS.D_SHERIFF,
-        rankId: fixtures.ranks.deputy.id,
-        reason: 'sheriff joins their own roster',
+    it('revokes a grant and queues the removal', async () => {
+      const issued = await issueGrant(guildAdminCtx, {
+        discordUserId: IDS.D_MEMBER,
+        managedRoleId: fixtures.managedRoles.grantable.id,
+        reason: 'temporary access',
       });
 
-      const error = await promoteMember(sheriffCtx, {
-        departmentId: fixtures.departments.hcso.id,
-        discordUserId: IDS.D_SHERIFF,
-        rankId: fixtures.ranks.corporal.id,
-        reason: 'self promotion',
-      }).catch((thrown) => thrown);
+      const result = await revokeGrant(guildAdminCtx, {
+        grantId: issued.grant.id,
+        reason: 'no longer needed',
+      });
 
-      expect(error.code).toBe('SELF_MANAGEMENT');
-      expect(error.userMessage).toMatch(/yourself/i);
+      expect(result.grant.revokedAt).not.toBeNull();
+      const audit = await testPrisma().auditLog.findFirst({ where: { action: 'grant.revoked' } });
+      expect(audit).not.toBeNull();
     });
 
-    it('refuses a duplicate hire', async () => {
+    it('refuses to grant to somebody at or above the actor authority', async () => {
       await expect(
-        hireMember(sheriffCtx, {
-          departmentId: fixtures.departments.hcso.id,
-          discordUserId: IDS.D_DEPUTY,
-          rankId: fixtures.ranks.deputy.id,
-          reason: 'already hired',
+        issueGrant(guildAdminCtx, {
+          discordUserId: IDS.D_ADMIN,
+          managedRoleId: fixtures.managedRoles.grantable.id,
+          reason: 'targeting an administrator',
         }),
-      ).rejects.toThrow(/already on the/i);
-    });
-
-    it('creates a member record when hiring an unknown Discord account', async () => {
-      const result = await hireMember(sheriffCtx, {
-        departmentId: fixtures.departments.hcso.id,
-        discordUserId: IDS.D_UNLINKED,
-        rankId: fixtures.ranks.deputy.id,
-        callsign: 'H-555',
-        reason: 'new recruit',
-      });
-
-      expect(result.membership.callsign).toBe('H-555');
-      const identity = await testPrisma().discordIdentity.findUnique({
-        where: { discordUserId: IDS.D_UNLINKED },
-      });
-      expect(identity).not.toBeNull();
-    });
-
-    it('refuses a duplicate callsign within a department', async () => {
-      await expect(
-        hireMember(sheriffCtx, {
-          departmentId: fixtures.departments.hcso.id,
-          discordUserId: IDS.D_UNLINKED,
-          rankId: fixtures.ranks.deputy.id,
-          callsign: 'H-101', // already used by the demo deputy
-          reason: 'clashing callsign',
-        }),
-      ).rejects.toThrow(/already in use/i);
-    });
-
-    it('records status changes with their reason', async () => {
-      const result = await suspendMember(sheriffCtx, {
-        departmentId: fixtures.departments.hcso.id,
-        discordUserId: IDS.D_DEPUTY,
-        reason: 'pending investigation',
-      });
-
-      expect(result.membership.status).toBe(MembershipStatus.SUSPENDED);
-      expect(result.membership.statusReason).toBe('pending investigation');
-
-      const audit = await testPrisma().auditLog.findFirst({
-        where: { action: 'roster.suspended', targetUserId: fixtures.users.deputy.id },
-      });
-      expect(audit.reason).toBe('pending investigation');
+      ).rejects.toThrow(/authority/i);
     });
   });
 
@@ -321,8 +339,8 @@ describe.skipIf(!available)('core services', () => {
   describe('permission escalation', () => {
     it('refuses to grant a capability the granter does not hold', async () => {
       await expect(
-        grantPermission(sheriffCtx, {
-          discordUserId: IDS.D_DEPUTY,
+        grantPermission(guildAdminCtx, {
+          discordUserId: IDS.D_MEMBER,
           capability: 'guild.register',
           scopeType: PermissionScopeType.GLOBAL,
           reason: 'escalation attempt',
@@ -330,47 +348,76 @@ describe.skipIf(!available)('core services', () => {
       ).rejects.toThrow();
     });
 
-    it('refuses to grant a rank ceiling above the granter own', async () => {
-      await testPrisma().user.update({
-        where: { id: fixtures.users.deputy.id },
-        data: { permissionLevel: 40 },
-      });
+    it('refuses to grant outside the granter guild', async () => {
+      // `sync.member` is held by the guild administrator, but only for HCSO.
+      await raiseMemberTo(40);
 
       await expect(
-        grantPermission(sheriffCtx, {
-          discordUserId: IDS.D_DEPUTY,
-          capability: 'roster.promote',
-          scopeType: PermissionScopeType.DEPARTMENT,
-          scopeId: fixtures.departments.hcso.id,
-          maxRankOrder: 70, // above the sheriff's Major ceiling
+        grantPermission(guildAdminCtx, {
+          discordUserId: IDS.D_MEMBER,
+          capability: 'sync.member',
+          scopeType: PermissionScopeType.GUILD,
+          scopeId: fixtures.guilds.fhpGuild.id,
           maxPermissionLevel: 20,
+          reason: 'another guild',
+        }),
+      ).rejects.toThrow(/for this guild/i);
+    });
+
+    it('refuses to grant a capability the target is not senior enough to hold', async () => {
+      // The member is at level 0; `mapping.create` requires 80 to hold at all.
+      await expect(
+        grantPermission(guildAdminCtx, {
+          discordUserId: IDS.D_MEMBER,
+          capability: 'mapping.create',
+          scopeType: PermissionScopeType.GUILD,
+          scopeId: fixtures.guilds.hcsoGuild.id,
+          maxPermissionLevel: 20,
+          reason: 'granting above their level',
+        }),
+      ).rejects.toThrow(/requires authority level 80/i);
+    });
+
+    it('refuses to grant an authority ceiling at or above the granter own level', async () => {
+      await raiseMemberTo(40);
+
+      await expect(
+        grantPermission(guildAdminCtx, {
+          discordUserId: IDS.D_MEMBER,
+          capability: 'sync.member',
+          scopeType: PermissionScopeType.GUILD,
+          scopeId: fixtures.guilds.hcsoGuild.id,
+          maxPermissionLevel: 80, // the guild admin is itself 80
           reason: 'too much authority',
         }),
-      ).rejects.toThrow(/rank ceiling above your own/i);
+      ).rejects.toThrow(/at or above your own level/i);
     });
 
     it('allows a narrower delegation and audits it', async () => {
-      await testPrisma().user.update({
-        where: { id: fixtures.users.deputy.id },
-        data: { permissionLevel: 40 },
-      });
+      await raiseMemberTo(40);
 
-      const assignment = await grantPermission(adminCtx, {
-        discordUserId: IDS.D_DEPUTY,
-        capability: 'roster.promote',
-        scopeType: PermissionScopeType.DEPARTMENT,
-        scopeId: fixtures.departments.hcso.id,
-        maxRankOrder: 20,
+      const assignment = await grantPermission(guildAdminCtx, {
+        discordUserId: IDS.D_MEMBER,
+        capability: 'sync.member',
+        scopeType: PermissionScopeType.GUILD,
+        scopeId: fixtures.guilds.hcsoGuild.id,
         maxPermissionLevel: 20,
-        reason: 'delegating promotions up to Corporal',
+        reason: 'delegating member resyncs',
       });
 
-      expect(assignment.maxRankOrder).toBe(20);
+      expect(assignment.maxPermissionLevel).toBe(20);
       const audit = await testPrisma().auditLog.findFirst({
-        where: { action: 'permission.granted', targetUserId: fixtures.users.deputy.id },
+        where: { action: 'permission.granted', targetUserId: fixtures.users.member.id },
       });
       expect(audit).not.toBeNull();
     });
+
+    async function raiseMemberTo(permissionLevel) {
+      await testPrisma().user.update({
+        where: { id: fixtures.users.member.id },
+        data: { permissionLevel },
+      });
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -381,7 +428,7 @@ describe.skipIf(!available)('core services', () => {
       sourceRoleId: IDS.R_MAIN_HCSO_MEMBER,
       targetGuildId: IDS.HCSO_GUILD,
       targetRoleId: IDS.R_HCSO_MEMBER,
-      reason: 'link the community role to the department role',
+      reason: 'link the community role to the guild role',
     };
 
     it('creates and enables a valid mapping', async () => {
@@ -392,6 +439,13 @@ describe.skipIf(!available)('core services', () => {
       );
       expect(mapping.enabled).toBe(true);
       expect(mapping.direction).toBe(MappingDirection.ONE_WAY);
+    });
+
+    it('requires authorization for BOTH guilds', async () => {
+      // The guild administrator controls HCSO but not the main community guild.
+      await expect(
+        createMapping(guildAdminCtx, { ...baseMapping, enabled: true }, { gateway }),
+      ).rejects.toThrow(/do not have mapping.create/i);
     });
 
     it('refuses a mapping into a guild that is not approved', async () => {
@@ -425,20 +479,18 @@ describe.skipIf(!available)('core services', () => {
     });
 
     it('refuses a protected role without the elevated capability', async () => {
-      // The sheriff has no mapping capabilities at all, so grant just enough to reach
-      // the protection check and prove that is what stops them.
       await testPrisma().user.update({
-        where: { id: fixtures.users.sheriff.id },
+        where: { id: fixtures.users.guildAdmin.id },
         data: { permissionLevel: 80 },
       });
       await grantPermission(adminCtx, {
-        discordUserId: IDS.D_SHERIFF,
+        discordUserId: IDS.D_GUILD_ADMIN,
         capability: 'mapping.create',
         scopeType: PermissionScopeType.GLOBAL,
         maxPermissionLevel: 40,
         reason: 'test setup',
       });
-      const ctx = discordContext(await loadActorByDiscordId(IDS.D_SHERIFF), {
+      const ctx = discordContext(await loadActorByDiscordId(IDS.D_GUILD_ADMIN), {
         discordGuildId: IDS.HCSO_GUILD,
       });
 

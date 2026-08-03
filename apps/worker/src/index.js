@@ -2,7 +2,7 @@
  * Worker process.
  *
  * Owns every write to Discord. The bot observes and commands; the worker executes. That
- * separation means a slow department resync can never block the bot's interaction
+ * separation means a slow guild-wide resync can never block the bot's interaction
  * responses (Discord gives you three seconds), and the worker can be scaled
  * independently.
  */
@@ -11,14 +11,8 @@ process.env.FRM_SERVICE = process.env.FRM_SERVICE ?? 'worker';
 import { Worker } from 'bullmq';
 import { createLogger, serializeError } from '@frm/logging';
 import { disconnectPrisma, getPrisma } from '@frm/database';
-import {
-  QUEUE_NAMES,
-  closeQueues,
-  closeRedis,
-  getBullConnection,
-  scheduleMaintenanceJobs,
-} from '@frm/queue';
-import { getEnv } from '@frm/shared';
+import { closeQueues, closeRedis, getBullConnection, scheduleMaintenanceJobs } from '@frm/queue';
+import { QUEUE_NAMES, getEnv } from '@frm/shared';
 import { createGatewayFromEnv } from '@frm/discord';
 import {
   createMaintenanceProcessor,

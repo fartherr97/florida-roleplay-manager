@@ -52,7 +52,7 @@ export function setPrismaForTesting(instance) {
  * Runs a function inside a transaction.
  *
  * Every mutation that must stay consistent with its audit record uses this: the row
- * change, the `MembershipEvent`, the `AuditLog` and the `SyncJob` row are written
+ * change, the `AuditLog` and the `SyncJob` row are written
  * together or not at all. Enqueueing onto BullMQ deliberately happens *after* the
  * commit, because a queue is not transactional.
  *

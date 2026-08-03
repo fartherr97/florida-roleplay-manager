@@ -12,13 +12,13 @@ import { DiscordOperationError, RETRY_POLICY, SyncIssueType } from '@frm/shared'
 const runSyncJob = vi.fn();
 const runMappingValidation = vi.fn();
 const runScheduledReconciliation = vi.fn();
-const detectRosterDrift = vi.fn();
+const validateManagedRoles = vi.fn();
 
 vi.mock('@frm/core', () => ({
   runSyncJob: (...args) => runSyncJob(...args),
   runMappingValidation: (...args) => runMappingValidation(...args),
   runScheduledReconciliation: (...args) => runScheduledReconciliation(...args),
-  detectRosterDrift: (...args) => detectRosterDrift(...args),
+  validateManagedRoles: (...args) => validateManagedRoles(...args),
 }));
 
 const { createMaintenanceProcessor, createSyncProcessor } =
@@ -121,25 +121,25 @@ describe('maintenance processor', () => {
   beforeEach(() => {
     runMappingValidation.mockReset();
     runScheduledReconciliation.mockReset();
-    detectRosterDrift.mockReset();
+    validateManagedRoles.mockReset();
   });
 
-  it('runs mapping validation and the drift check together', async () => {
+  it('runs mapping validation and the managed-role check together', async () => {
     runMappingValidation.mockResolvedValue({ checked: 3, healthy: 3, disabled: 0 });
-    detectRosterDrift.mockResolvedValue({ missingFromGuild: [] });
+    validateManagedRoles.mockResolvedValue({ checked: 2, healthy: 2, problems: [] });
 
     const result = await createMaintenanceProcessor({ gateway: {} })(
       fakeJob({ name: JobName.MAPPING_VALIDATION }),
     );
 
     expect(runMappingValidation).toHaveBeenCalledOnce();
-    expect(detectRosterDrift).toHaveBeenCalledOnce();
+    expect(validateManagedRoles).toHaveBeenCalledOnce();
     expect(result.checked).toBe(3);
   });
 
-  it('does not let a drift-check failure fail the whole sweep', async () => {
+  it('does not let a managed-role check failure fail the whole sweep', async () => {
     runMappingValidation.mockResolvedValue({ checked: 1 });
-    detectRosterDrift.mockRejectedValue(new Error('discord unavailable'));
+    validateManagedRoles.mockRejectedValue(new Error('discord unavailable'));
 
     const result = await createMaintenanceProcessor({ gateway: {} })(
       fakeJob({ name: JobName.MAPPING_VALIDATION }),

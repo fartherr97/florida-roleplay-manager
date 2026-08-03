@@ -153,11 +153,13 @@ describe.skipIf(!available)('two-person approval', () => {
     const { mapping } = await createProtectedMapping();
     const pending = await prisma.pendingApproval.findFirst({ where: { mappingId: mapping.id } });
 
-    const sheriffCtx = discordContext(await loadActorByDiscordId(IDS.D_SHERIFF), {
+    // The guild administrator may create and edit mappings, but approving is a global
+    // capability they deliberately do not hold.
+    const guildAdminCtx = discordContext(await loadActorByDiscordId(IDS.D_GUILD_ADMIN), {
       discordGuildId: IDS.HCSO_GUILD,
     });
 
-    await expect(approvePending(sheriffCtx, { approvalId: pending.id })).rejects.toThrow(
+    await expect(approvePending(guildAdminCtx, { approvalId: pending.id })).rejects.toThrow(
       /mapping.approve/i,
     );
   });
