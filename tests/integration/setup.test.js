@@ -6,7 +6,7 @@
  * the server, declares its member role as managed, and maps the main community into it.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { discordContext, provisionDepartment } from '@frm/core';
+import { discordContext, provisionCommunity, provisionDepartment } from '@frm/core';
 import { loadActorByDiscordId } from '@frm/authorization';
 import { closeQueues, closeRedis } from '@frm/queue';
 import { disconnectPrisma } from '@frm/database';
@@ -149,5 +149,51 @@ describe.skipIf(!available)('department provisioning', () => {
     await expect(
       provisionDepartment(adminCtx, { ...base, wireIn: false }, { gateway }),
     ).rejects.toThrow(/Manage Channels/i);
+  });
+
+  describe('community', () => {
+    // A second fresh server, to be set up as the main community hub.
+    const NEW_COMMUNITY_GUILD = '910000000000000010';
+    let communityCtx;
+
+    beforeEach(async () => {
+      gateway.defineGuild({
+        id: NEW_COMMUNITY_GUILD,
+        name: 'New Community',
+        botHighestRolePosition: 100,
+      });
+      communityCtx = discordContext(await loadActorByDiscordId(IDS.D_ADMIN), {
+        discordGuildId: NEW_COMMUNITY_GUILD,
+      });
+    });
+
+    const communityBase = { discordGuildId: NEW_COMMUNITY_GUILD, name: 'New Community' };
+
+    it('creates the structure and registers the server as the main community', async () => {
+      const result = await provisionCommunity(communityCtx, communityBase, { gateway });
+
+      expect(result.created.roles.length).toBeGreaterThan(0);
+      expect(result.created.categories.length).toBeGreaterThan(0);
+      expect(result.wiredIn.registered).toBe(true);
+
+      const guild = await prisma.approvedGuild.findFirst({
+        where: { discordGuildId: NEW_COMMUNITY_GUILD },
+      });
+      expect(guild.type).toBe('MAIN_COMMUNITY');
+      // The community server has no managed role of its own.
+      const managed = await prisma.managedRole.findFirst({ where: { approvedGuildId: guild.id } });
+      expect(managed).toBeNull();
+    });
+
+    it('is idempotent on a second run', async () => {
+      await provisionCommunity(communityCtx, communityBase, { gateway });
+      const callsBefore = gateway.calls.length;
+
+      const second = await provisionCommunity(communityCtx, communityBase, { gateway });
+
+      expect(second.created.roles).toEqual([]);
+      expect(second.created.channels).toEqual([]);
+      expect(gateway.calls.length).toBe(callsBefore);
+    });
   });
 });

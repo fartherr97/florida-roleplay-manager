@@ -6,7 +6,11 @@
  * anything already present, matched by name, must plan as `exists`, never `create`.
  */
 import { describe, expect, it } from 'vitest';
-import { buildDepartmentTemplate, planDepartmentProvision } from '@frm/core';
+import {
+  buildCommunityTemplate,
+  buildDepartmentTemplate,
+  planDepartmentProvision,
+} from '@frm/core';
 
 describe('buildDepartmentTemplate', () => {
   it('prefixes role names with the tag and marks the member role as managed', () => {
@@ -28,6 +32,27 @@ describe('buildDepartmentTemplate', () => {
     const everyone = command.overwrites.find((overwrite) => overwrite.role === 'everyone');
     expect(everyone.deny).toContain('ViewChannel');
     expect(command.overwrites.some((overwrite) => overwrite.role === 'command')).toBe(true);
+  });
+});
+
+describe('buildCommunityTemplate', () => {
+  it('has no platform-managed role of its own and locks the Staff category', () => {
+    const template = buildCommunityTemplate({ name: 'Test Community' });
+
+    expect(template.managedRoleKey).toBeNull();
+    expect(template.roles.map((role) => role.key)).toContain('staff');
+
+    const staff = template.categories.find((category) => category.key === 'staff');
+    const everyone = staff.overwrites.find((overwrite) => overwrite.role === 'everyone');
+    expect(everyone.deny).toContain('ViewChannel');
+    expect(staff.overwrites.some((overwrite) => overwrite.role === 'staff')).toBe(true);
+  });
+
+  it('plans as fully creatable on an empty server', () => {
+    const template = buildCommunityTemplate({ name: 'Test Community' });
+    const plan = planDepartmentProvision(template, [], []);
+    expect(plan.toCreate.roles).toBe(2);
+    expect(plan.toCreate.categories).toBe(template.categories.length);
   });
 });
 

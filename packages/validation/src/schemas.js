@@ -58,20 +58,31 @@ export const removeGuildSchema = z.object({
   reason,
 });
 
+/** A role colour given as a hex string (with or without '#'), parsed to an int. */
+const hexColor = z
+  .string()
+  .trim()
+  .regex(/^#?[0-9a-fA-F]{6}$/, 'Use a hex colour like #1F8B4C')
+  .transform((value) => Number.parseInt(value.replace('#', ''), 16));
+
 export const provisionDepartmentSchema = z.object({
   discordGuildId: snowflake,
   name: displayName,
   tag: z.string().trim().min(1).max(20),
-  color: z
-    .string()
-    .trim()
-    .regex(/^#?[0-9a-fA-F]{6}$/, 'Use a hex colour like #1F8B4C')
-    .transform((value) => Number.parseInt(value.replace('#', ''), 16))
-    .optional(),
+  color: hexColor.optional(),
   wireIn: booleanFlag.default(true),
   // The main community's member role, used to build the sync mapping. The main community
   // guild is resolved from the allowlist, so only the role id is needed here.
   mainCommunityRoleId: optionalSnowflake,
+  dryRun: booleanFlag.default(false),
+  reason: optionalReason,
+});
+
+export const provisionCommunitySchema = z.object({
+  discordGuildId: snowflake,
+  name: displayName,
+  color: hexColor.optional(),
+  wireIn: booleanFlag.default(true),
   dryRun: booleanFlag.default(false),
   reason: optionalReason,
 });

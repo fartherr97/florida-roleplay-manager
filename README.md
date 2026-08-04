@@ -107,7 +107,7 @@ Discord application setup and required permissions:
 ## Commands
 
 ```
-/setup        department
+/setup        department · community
 /guild        list · register · remove · settings · status
 /mapping      create · list · view · edit · test · enable · disable · remove
               approvals · approve · reject
@@ -119,13 +119,14 @@ Discord application setup and required permissions:
 /system       health
 ```
 
-`/setup department` provisions a whole department server in one step — it opens a modal,
-previews exactly what it will create, and on confirmation builds the categories, channels,
-roles and permission overwrites from an editable template
-([`packages/core/src/templates/department.js`](packages/core/src/templates/department.js)),
-then registers the server, marks its member role as managed, and maps the main community
-into it. It is idempotent: re-running only creates what is missing, so it doubles as a
-repair command.
+`/setup department` and `/setup community` provision a whole server in one step — each opens
+a modal, previews exactly what it will create, and on confirmation builds the categories,
+channels, roles and permission overwrites from an editable template
+([`department.js`](packages/core/src/templates/department.js) /
+[`community.js`](packages/core/src/templates/community.js)). `community` registers the server
+as your `MAIN_COMMUNITY` hub; `department` registers the server, marks its member role as
+managed, and maps the main community into it. Both are idempotent: re-running only creates
+what is missing, so they double as repair commands.
 
 Anything destructive or large asks for confirmation first, and guild/global resyncs show a
 real preview — computed by the same planner that will do the work — before anything is

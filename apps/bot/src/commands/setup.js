@@ -1,9 +1,10 @@
 /**
  * `/setup` - one-command server provisioning.
  *
- * `/setup department` opens a modal for the essentials, shows a preview of exactly what it
- * will create (a dry run through the same engine), and only touches Discord after the
- * administrator confirms. Re-running it is safe: anything that already exists is skipped.
+ * `/setup department` and `/setup community` each open a modal for the essentials, show a
+ * preview of exactly what they will create (a dry run through the same engine), and only
+ * touch Discord after the administrator confirms. Re-running is safe: anything that
+ * already exists is skipped.
  */
 import {
   ActionRowBuilder,
@@ -14,7 +15,7 @@ import {
   TextInputStyle,
 } from 'discord.js';
 import { randomUUID } from 'node:crypto';
-import { provisionDepartment } from '@frm/core';
+import { provisionCommunity, provisionDepartment } from '@frm/core';
 import { newRequestId } from '@frm/shared';
 import { buildEmbed, renderError, requestConfirmation, truncate } from '../lib/ui.js';
 
@@ -31,58 +32,118 @@ export const data = new SlashCommandBuilder()
           .setDescription('Also register the server and set up role sync (default: yes)')
           .setRequired(false),
       ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('community')
+      .setDescription('Create the channels, roles and permissions for the main community server')
+      .addBooleanOption((option) =>
+        option
+          .setName('wire_in')
+          .setDescription('Also register the server as the community hub (default: yes)')
+          .setRequired(false),
+      ),
   );
 
 export async function execute(interaction, { ctx, gateway }) {
-  if (interaction.options.getSubcommand() === 'department') {
-    return handleDepartment(interaction, ctx, gateway);
+  switch (interaction.options.getSubcommand()) {
+    case 'department':
+      return runSetup(interaction, ctx, gateway, DEPARTMENT);
+    case 'community':
+      return runSetup(interaction, ctx, gateway, COMMUNITY);
+    default:
+      throw new Error('Unknown subcommand');
   }
-  throw new Error('Unknown subcommand');
 }
+
+/** Per-subcommand configuration: what the modal asks and which service it calls. */
+const DEPARTMENT = {
+  label: 'department',
+  modalTitle: 'Set up department server',
+  fields: [
+    {
+      id: 'name',
+      label: 'Department name',
+      placeholder: "Hillsborough County Sheriff's Office",
+      required: true,
+      max: 100,
+    },
+    { id: 'tag', label: 'Role tag / abbreviation', placeholder: 'HCSO', required: true, max: 20 },
+    {
+      id: 'color',
+      label: 'Role colour hex (optional)',
+      placeholder: '#1F8B4C',
+      required: false,
+      max: 7,
+    },
+    {
+      id: 'main_role',
+      label: 'Main-community member role ID (optional)',
+      placeholder: 'For auto-sync — the role in your main server',
+      required: false,
+      max: 20,
+    },
+  ],
+  buildInput: (interaction, fields, wireIn) => ({
+    discordGuildId: interaction.guildId,
+    name: fields.getTextInputValue('name'),
+    tag: fields.getTextInputValue('tag'),
+    color: fields.getTextInputValue('color') || undefined,
+    mainCommunityRoleId: fields.getTextInputValue('main_role') || undefined,
+    wireIn,
+  }),
+  provision: provisionDepartment,
+  wireInNote:
+    'It will also register the server on the allowlist, mark its member role as managed, and (if you gave a main-community role) create the sync mapping.',
+};
+
+const COMMUNITY = {
+  label: 'community',
+  modalTitle: 'Set up community server',
+  fields: [
+    {
+      id: 'name',
+      label: 'Community name',
+      placeholder: 'Florida Roleplay Community',
+      required: true,
+      max: 100,
+    },
+    {
+      id: 'color',
+      label: 'Role colour hex (optional)',
+      placeholder: '#5865F2',
+      required: false,
+      max: 7,
+    },
+  ],
+  buildInput: (interaction, fields, wireIn) => ({
+    discordGuildId: interaction.guildId,
+    name: fields.getTextInputValue('name'),
+    color: fields.getTextInputValue('color') || undefined,
+    wireIn,
+  }),
+  provision: provisionCommunity,
+  wireInNote: 'It will also register this server on the allowlist as your main community hub.',
+};
 
 const inputRow = (input) => new ActionRowBuilder().addComponents(input);
 
-async function handleDepartment(interaction, ctx, gateway) {
+async function runSetup(interaction, ctx, gateway, config) {
   const wireIn = interaction.options.getBoolean('wire_in') ?? true;
 
-  const modalId = `setup-dept:${randomUUID()}`;
-  const modal = new ModalBuilder().setCustomId(modalId).setTitle('Set up department server');
+  const modalId = `setup-${config.label}:${randomUUID()}`;
+  const modal = new ModalBuilder().setCustomId(modalId).setTitle(config.modalTitle);
   modal.addComponents(
-    inputRow(
-      new TextInputBuilder()
-        .setCustomId('name')
-        .setLabel('Department name')
-        .setPlaceholder("Hillsborough County Sheriff's Office")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(100),
-    ),
-    inputRow(
-      new TextInputBuilder()
-        .setCustomId('tag')
-        .setLabel('Role tag / abbreviation')
-        .setPlaceholder('HCSO')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(20),
-    ),
-    inputRow(
-      new TextInputBuilder()
-        .setCustomId('color')
-        .setLabel('Role colour hex (optional)')
-        .setPlaceholder('#1F8B4C')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(7),
-    ),
-    inputRow(
-      new TextInputBuilder()
-        .setCustomId('main_role')
-        .setLabel('Main-community member role ID (optional)')
-        .setPlaceholder('For auto-sync — the role in your main server')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(20),
+    ...config.fields.map((field) =>
+      inputRow(
+        new TextInputBuilder()
+          .setCustomId(field.id)
+          .setLabel(field.label)
+          .setPlaceholder(field.placeholder)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(field.required)
+          .setMaxLength(field.max),
+      ),
     ),
   );
 
@@ -101,28 +162,20 @@ async function handleDepartment(interaction, ctx, gateway) {
 
   await submission.deferReply({ flags: MessageFlags.Ephemeral });
   const requestId = newRequestId();
-
-  const input = {
-    discordGuildId: interaction.guildId,
-    name: submission.fields.getTextInputValue('name'),
-    tag: submission.fields.getTextInputValue('tag'),
-    color: submission.fields.getTextInputValue('color') || undefined,
-    mainCommunityRoleId: submission.fields.getTextInputValue('main_role') || undefined,
-    wireIn,
-  };
+  const input = config.buildInput(interaction, submission.fields, wireIn);
 
   try {
-    const preview = await provisionDepartment(ctx, { ...input, dryRun: true }, { gateway });
+    const preview = await config.provision(ctx, { ...input, dryRun: true }, { gateway });
 
     const confirmed = await requestConfirmation(submission, {
       title: `Set up ${preview.guild.name}?`,
-      description: previewDescription(preview, wireIn),
+      description: previewDescription(preview, wireIn, config),
       confirmLabel: 'Create it',
       danger: false,
     });
     if (!confirmed) return undefined;
 
-    const result = await provisionDepartment(ctx, { ...input, dryRun: false }, { gateway });
+    const result = await config.provision(ctx, { ...input, dryRun: false }, { gateway });
     return submission.editReply({ embeds: [resultEmbed(result, wireIn)], components: [] });
   } catch (error) {
     return submission
@@ -131,7 +184,7 @@ async function handleDepartment(interaction, ctx, gateway) {
   }
 }
 
-function previewDescription(preview, wireIn) {
+function previewDescription(preview, wireIn, config) {
   const { toCreate } = preview.plan;
   const nothing = toCreate.roles + toCreate.categories + toCreate.channels === 0;
 
@@ -146,12 +199,7 @@ function previewDescription(preview, wireIn) {
     if (toCreate.channels) lines.push(`• ${toCreate.channels} channel(s)`);
   }
   lines.push('', 'Anything already present is skipped — this is safe to re-run.');
-  if (wireIn) {
-    lines.push(
-      '',
-      'It will also register the server on the allowlist, mark its member role as managed, and (if you gave a main-community role) create the sync mapping.',
-    );
-  }
+  if (wireIn) lines.push('', config.wireInNote);
   return lines.join('\n');
 }
 
@@ -172,14 +220,12 @@ function resultEmbed(result, wireIn) {
   ];
 
   if (wireIn && wiredIn) {
-    fields.push({
-      name: 'Platform',
-      value: [
-        `Registered on allowlist: ${wiredIn.registered ? 'yes' : 'no'}`,
-        `Member role managed: ${wiredIn.managedRole ? 'yes' : 'no'}`,
-        `Sync mapping: ${wiredIn.mapping}`,
-      ].join('\n'),
-    });
+    const platform = [`Registered on allowlist: ${wiredIn.registered ? 'yes' : 'no'}`];
+    if ('managedRole' in wiredIn) {
+      platform.push(`Member role managed: ${wiredIn.managedRole ? 'yes' : 'no'}`);
+    }
+    if ('mapping' in wiredIn) platform.push(`Sync mapping: ${wiredIn.mapping}`);
+    fields.push({ name: 'Platform', value: platform.join('\n') });
   }
 
   if (warnings.length) {
@@ -191,7 +237,7 @@ function resultEmbed(result, wireIn) {
 
   return buildEmbed({
     title: `${result.guild.name} is set up`,
-    description: 'Done. Re-run /setup department any time to add anything that is missing.',
+    description: 'Done. Re-run /setup any time to add anything that is missing.',
     color: warnings.length ? 'warning' : 'success',
     fields,
   });

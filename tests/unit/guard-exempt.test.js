@@ -13,6 +13,7 @@ describe('isAllowlistExempt', () => {
   it('exempts the bootstrap commands', () => {
     expect(isAllowlistExempt('guild', 'register')).toBe(true);
     expect(isAllowlistExempt('setup', 'department')).toBe(true);
+    expect(isAllowlistExempt('setup', 'community')).toBe(true);
   });
 
   it('does not exempt any other /guild subcommand', () => {

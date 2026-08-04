@@ -1,11 +1,11 @@
 /**
  * Server provisioning.
  *
- * `/setup department` turns an empty Discord server into a working department server in
- * one step: it creates the roles, categories, channels and permission overwrites from the
- * template, then (optionally) wires the server into the platform - registers it on the
- * allowlist, declares its member role as managed, and maps the main community's role into
- * it so membership syncs automatically.
+ * `/setup department` and `/setup community` turn an empty Discord server into a working
+ * one in a single step: they create the roles, categories, channels and permission
+ * overwrites from a template, then wire the server into the platform - register it on the
+ * allowlist and (for a department) declare its member role as managed and map the main
+ * community's role into it, so membership syncs automatically.
  *
  * Two properties make this safe to hand to an administrator:
  *
@@ -18,14 +18,16 @@ import { getPrisma, notDeleted } from '@frm/database';
 import { createLogger, serializeError } from '@frm/logging';
 import { AuditAction, GuildType, PreconditionError, RolePurpose } from '@frm/shared';
 import { authorize } from '@frm/authorization';
-import { provisionDepartmentSchema, parseOrThrow } from '@frm/validation';
+import { parseOrThrow, provisionCommunitySchema, provisionDepartmentSchema } from '@frm/validation';
 import { recordAudit } from './audit-service.js';
 import { registerGuild } from './guild-service.js';
 import { upsertManagedRole } from './managed-role-service.js';
 import { createMapping } from './mapping-service.js';
 import { buildDepartmentTemplate } from './templates/department.js';
+import { buildCommunityTemplate } from './templates/community.js';
 
 export { buildDepartmentTemplate } from './templates/department.js';
+export { buildCommunityTemplate } from './templates/community.js';
 
 const log = createLogger('core.setup');
 
@@ -40,7 +42,7 @@ const sameName = (a, b) => a?.trim().toLowerCase() === b?.trim().toLowerCase();
  * @param {Array<{id: string, name: string}>} existingRoles
  * @param {Array<{id: string, name: string, type: string, parentId: string|null}>} existingChannels
  */
-export function planDepartmentProvision(template, existingRoles, existingChannels) {
+export function planProvision(template, existingRoles, existingChannels) {
   const roles = template.roles.map((role) => {
     const existing = existingRoles.find((candidate) => sameName(candidate.name, role.name));
     return {
@@ -87,8 +89,11 @@ export function planDepartmentProvision(template, existingRoles, existingChannel
   return { roles, categories, toCreate };
 }
 
+/** Back-compat alias: the planner is generic, but was first shipped as this name. */
+export const planDepartmentProvision = planProvision;
+
 /**
- * Provisions a department server.
+ * Provisions a department server: structure, then the department wire-in.
  *
  * @param {import('./context.js').ServiceContext} ctx
  * @param {object} input
@@ -98,6 +103,64 @@ export async function provisionDepartment(ctx, input, { gateway } = {}) {
   const data = parseOrThrow(provisionDepartmentSchema, input);
   authorize(ctx.actor, { capability: 'guild.provision', scope: {} });
 
+  const template = buildDepartmentTemplate({ name: data.name, tag: data.tag, color: data.color });
+  const built = await createStructure(ctx, { data, template, gateway, label: 'department' });
+  if (built.dryRun) return dryRunResult(built);
+
+  const warnings = [];
+  const wiredIn = data.wireIn
+    ? await wireDepartment(ctx, {
+        template,
+        discordGuildId: data.discordGuildId,
+        name: data.name,
+        memberRoleId: built.roleIdByKey[template.managedRoleKey],
+        mainCommunityRoleId: data.mainCommunityRoleId,
+        reason: built.reason,
+        gateway,
+        warnings,
+      })
+    : null;
+
+  await auditProvision(ctx, { data, created: built.created, wiredIn, reason: built.reason });
+  return finalResult(built, wiredIn, warnings);
+}
+
+/**
+ * Provisions the main community server: structure, then register it as the hub.
+ *
+ * @param {import('./context.js').ServiceContext} ctx
+ * @param {object} input
+ * @param {{gateway?: object}} [options]
+ */
+export async function provisionCommunity(ctx, input, { gateway } = {}) {
+  const data = parseOrThrow(provisionCommunitySchema, input);
+  authorize(ctx.actor, { capability: 'guild.provision', scope: {} });
+
+  const template = buildCommunityTemplate({ name: data.name, color: data.color });
+  const built = await createStructure(ctx, { data, template, gateway, label: 'community' });
+  if (built.dryRun) return dryRunResult(built);
+
+  const warnings = [];
+  const wiredIn = data.wireIn
+    ? await wireCommunity(ctx, {
+        discordGuildId: data.discordGuildId,
+        name: data.name,
+        reason: built.reason,
+        gateway,
+        warnings,
+      })
+    : null;
+
+  await auditProvision(ctx, { data, created: built.created, wiredIn, reason: built.reason });
+  return finalResult(built, wiredIn, warnings);
+}
+
+/**
+ * Creates the Discord structure a template describes - roles, then categories with their
+ * overwrites, then the channels inside them. Shared by both provisioning commands; the
+ * per-server wire-in is what differs and stays in the callers.
+ */
+async function createStructure(ctx, { data, template, gateway, label }) {
   if (!gateway) {
     throw new PreconditionError('Server provisioning needs a live Discord connection.');
   }
@@ -112,27 +175,20 @@ export async function provisionDepartment(ctx, input, { gateway } = {}) {
     );
   }
 
-  const template = buildDepartmentTemplate({ name: data.name, tag: data.tag, color: data.color });
   const [existingRoles, existingChannels] = await Promise.all([
     gateway.listRoles(data.discordGuildId),
     gateway.listChannels(data.discordGuildId),
   ]);
-  const plan = planDepartmentProvision(template, existingRoles, existingChannels);
+  const plan = planProvision(template, existingRoles, existingChannels);
 
   if (data.dryRun) {
-    return {
-      dryRun: true,
-      guild: { discordGuildId: guild.id, name: guild.name },
-      plan,
-      warnings: [],
-    };
+    return { guild, plan, dryRun: true, created: null, roleIdByKey: null, reason: null };
   }
 
   const reason =
     data.reason ??
-    `Provisioned via /setup department by ${ctx.actor?.user?.displayName ?? 'an administrator'}`;
+    `Provisioned via /setup ${label} by ${ctx.actor?.user?.displayName ?? 'an administrator'}`;
   const created = { roles: [], categories: [], channels: [] };
-  const warnings = [];
 
   // 1. Roles first: permission overwrites reference them by id.
   const roleIdByKey = {};
@@ -178,20 +234,30 @@ export async function provisionDepartment(ctx, input, { gateway } = {}) {
     }
   }
 
-  // 4. Wire the finished server into the platform.
-  const wiredIn = data.wireIn
-    ? await wireIntoPlatform(ctx, {
-        template,
-        discordGuildId: data.discordGuildId,
-        name: data.name,
-        memberRoleId: roleIdByKey[template.managedRoleKey],
-        mainCommunityRoleId: data.mainCommunityRoleId,
-        reason,
-        gateway,
-        warnings,
-      })
-    : null;
+  return { guild, plan, dryRun: false, created, roleIdByKey, reason };
+}
 
+function dryRunResult(built) {
+  return {
+    dryRun: true,
+    guild: { discordGuildId: built.guild.id, name: built.guild.name },
+    plan: built.plan,
+    warnings: [],
+  };
+}
+
+function finalResult(built, wiredIn, warnings) {
+  return {
+    dryRun: false,
+    guild: { discordGuildId: built.guild.id, name: built.guild.name },
+    plan: built.plan,
+    created: built.created,
+    wiredIn,
+    warnings,
+  };
+}
+
+async function auditProvision(ctx, { data, created, wiredIn, reason }) {
   await recordAudit(ctx.prisma ?? getPrisma(), {
     ctx,
     action: AuditAction.GUILD_PROVISIONED,
@@ -210,17 +276,30 @@ export async function provisionDepartment(ctx, input, { gateway } = {}) {
 
   log.info(
     { discordGuildId: data.discordGuildId, created, wiredIn: Boolean(wiredIn) },
-    'department server provisioned',
+    'server provisioned',
   );
+}
 
-  return {
-    dryRun: false,
-    guild: { discordGuildId: guild.id, name: guild.name },
-    plan,
-    created,
-    wiredIn,
-    warnings,
-  };
+/** Registers the community server as the hub. Best-effort; a failure becomes a warning. */
+async function wireCommunity(ctx, { discordGuildId, name, reason, gateway, warnings }) {
+  const result = { registered: false };
+  try {
+    await registerGuild(
+      ctx,
+      { discordGuildId, name, type: GuildType.MAIN_COMMUNITY, syncEnabled: true, reason },
+      { gateway },
+    );
+    result.registered = true;
+  } catch (error) {
+    if (error?.code === 'CONFLICT') {
+      result.registered = true;
+    } else {
+      warnings.push(
+        `Could not register the server on the allowlist: ${error?.userMessage ?? error?.message}`,
+      );
+    }
+  }
+  return result;
 }
 
 /**
@@ -229,7 +308,7 @@ export async function provisionDepartment(ctx, input, { gateway } = {}) {
  * failure in any step is collected as a warning rather than thrown, and the command tells
  * the administrator exactly what still needs doing by hand.
  */
-async function wireIntoPlatform(
+async function wireDepartment(
   ctx,
   { template, discordGuildId, name, memberRoleId, mainCommunityRoleId, reason, gateway, warnings },
 ) {
@@ -294,7 +373,7 @@ async function wireIntoPlatform(
   });
   if (!mainCommunity) {
     warnings.push(
-      'No approved main-community server is registered, so the sync mapping was skipped. Register it, then run /mapping create.',
+      'No approved main-community server is registered, so the sync mapping was skipped. Run /setup community there first, then /mapping create.',
     );
     result.mapping = 'skipped';
     return result;

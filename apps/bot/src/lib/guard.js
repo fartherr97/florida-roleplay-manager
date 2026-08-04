@@ -35,7 +35,7 @@ const RATE_LIMIT = { max: 20, windowSeconds: 60 };
  * fail-fast allowlist gate; the real check, that the caller is a global administrator,
  * still runs inside `registerGuild` and `provisionDepartment`.
  */
-const ALLOWLIST_EXEMPT = new Set(['guild register', 'setup department']);
+const ALLOWLIST_EXEMPT = new Set(['guild register', 'setup department', 'setup community']);
 
 /**
  * Whether a command may run before its guild is on the allowlist.
