@@ -71,7 +71,10 @@ export const data = new SlashCommandBuilder()
     sub
       .setName('settings')
       .setDescription('Change a server settings')
+      // Discord requires every required option before the optional ones, so `reason`
+      // (required) comes ahead of the two optional toggles.
       .addStringOption(guildOption(true))
+      .addStringOption(reasonOption(true))
       .addBooleanOption((option) =>
         option.setName('enabled').setDescription('Is the guild active?').setRequired(false),
       )
@@ -80,8 +83,7 @@ export const data = new SlashCommandBuilder()
           .setName('sync_enabled')
           .setDescription('Should roles be synchronized here?')
           .setRequired(false),
-      )
-      .addStringOption(reasonOption(true)),
+      ),
   )
   .addSubcommand((sub) =>
     sub

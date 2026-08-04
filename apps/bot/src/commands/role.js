@@ -27,7 +27,10 @@ export const data = new SlashCommandBuilder()
     sub
       .setName('manage')
       .setDescription('Declare a Discord role as managed by the platform')
+      // Discord requires every required option before the optional ones, so `reason`
+      // (required) comes ahead of the optional role/purpose/protection options.
       .addStringOption(guildOption(true))
+      .addStringOption(reasonOption(true))
       .addRoleOption((option) =>
         option
           .setName('discord_role')
@@ -57,8 +60,7 @@ export const data = new SlashCommandBuilder()
             { name: 'TWO_PERSON', value: 'TWO_PERSON' },
           )
           .setRequired(false),
-      )
-      .addStringOption(reasonOption(true)),
+      ),
   )
   .addSubcommand((sub) =>
     sub.setName('list').setDescription('List managed roles').addStringOption(guildOption(false)),
