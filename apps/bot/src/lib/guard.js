@@ -27,6 +27,34 @@ const log = createLogger('bot.guard');
 const RATE_LIMIT = { max: 20, windowSeconds: 60 };
 
 /**
+ * Commands allowed to run in a guild that is not (yet) on the allowlist.
+ *
+ * Registering a server is how the very first guild ever gets onto the allowlist, so it
+ * cannot itself require an already-approved guild - that would be an inescapable chicken
+ * and egg. This only skips the fail-fast allowlist gate; the real check, that the caller
+ * is a global administrator, still runs inside `registerGuild`.
+ */
+const ALLOWLIST_EXEMPT = new Set(['guild register']);
+
+/**
+ * Whether a command may run before its guild is on the allowlist.
+ * @param {string} commandName
+ * @param {string|null} [subcommand]
+ */
+export function isAllowlistExempt(commandName, subcommand = null) {
+  return ALLOWLIST_EXEMPT.has([commandName, subcommand].filter(Boolean).join(' '));
+}
+
+/** The subcommand of an interaction, or null when it has none. */
+function subcommandOf(interaction) {
+  try {
+    return interaction.options.getSubcommand(false);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @param {import('discord.js').Interaction} interaction
  * @returns {Promise<{ok: false} | {ok: true, ctx: object, requestId: string}>}
  */
@@ -44,23 +72,27 @@ export async function guardInteraction(interaction) {
     return { ok: false };
   }
 
-  const approved = await isGuildApproved(interaction.guildId);
-  if (!approved) {
-    // Deliberately terse: an unapproved server does not get to learn about the
-    // platform's structure.
-    await reply(
-      interaction,
-      errorEmbed(
-        'Server not approved',
-        'This Discord server is not approved for the Florida Roleplay Manager platform. ' +
-          'Contact a global administrator if you believe this is a mistake.',
-      ),
-    );
-    log.warn(
-      { discordGuildId: interaction.guildId, command: interaction.commandName },
-      'command refused in unapproved guild',
-    );
-    return { ok: false };
+  // The allowlist gate is skipped only for the bootstrap command that creates the very
+  // first approval. Everything else is refused fast in an unapproved guild.
+  if (!isAllowlistExempt(interaction.commandName, subcommandOf(interaction))) {
+    const approved = await isGuildApproved(interaction.guildId);
+    if (!approved) {
+      // Deliberately terse: an unapproved server does not get to learn about the
+      // platform's structure.
+      await reply(
+        interaction,
+        errorEmbed(
+          'Server not approved',
+          'This Discord server is not approved for the Florida Roleplay Manager platform. ' +
+            'Contact a global administrator if you believe this is a mistake.',
+        ),
+      );
+      log.warn(
+        { discordGuildId: interaction.guildId, command: interaction.commandName },
+        'command refused in unapproved guild',
+      );
+      return { ok: false };
+    }
   }
 
   try {
