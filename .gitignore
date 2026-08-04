@@ -12,3 +12,6 @@ npm-debug.log*
 prisma/.generated/
 .pgdata/
 .tmp/
+
+# Redis snapshot written when a local redis-server runs during tests
+dump.rdb
