@@ -58,6 +58,24 @@ export const removeGuildSchema = z.object({
   reason,
 });
 
+export const provisionDepartmentSchema = z.object({
+  discordGuildId: snowflake,
+  name: displayName,
+  tag: z.string().trim().min(1).max(20),
+  color: z
+    .string()
+    .trim()
+    .regex(/^#?[0-9a-fA-F]{6}$/, 'Use a hex colour like #1F8B4C')
+    .transform((value) => Number.parseInt(value.replace('#', ''), 16))
+    .optional(),
+  wireIn: booleanFlag.default(true),
+  // The main community's member role, used to build the sync mapping. The main community
+  // guild is resolved from the allowlist, so only the role id is needed here.
+  mainCommunityRoleId: optionalSnowflake,
+  dryRun: booleanFlag.default(false),
+  reason: optionalReason,
+});
+
 export const listGuildsSchema = paginationWithSort(
   ['registeredAt', 'name', 'type'],
   'registeredAt',

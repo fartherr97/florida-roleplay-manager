@@ -15,7 +15,14 @@
  * @property {boolean} available
  * @property {boolean} botPresent
  * @property {boolean} botCanManageRoles
+ * @property {boolean} botCanManageChannels
  * @property {number} botHighestRolePosition
+ *
+ * @typedef {object} ChannelSnapshot
+ * @property {string} id
+ * @property {string} name
+ * @property {string} type  one of the abstract types: 'category' | 'text' | 'voice'
+ * @property {string|null} parentId  the category this channel sits under
  *
  * @typedef {object} RoleSnapshot
  * @property {string} id
@@ -30,10 +37,41 @@
  * @property {string[]} roleIds
  */
 import { createLogger, serializeError } from '@frm/logging';
-import { PermissionFlagsBits } from 'discord.js';
+import { ChannelType, PermissionFlagsBits } from 'discord.js';
 import { mapDiscordError } from './errors.js';
 
 const log = createLogger('discord.gateway');
+
+/** Maps the gateway's abstract channel types onto discord.js channel-type constants. */
+const CHANNEL_TYPE = {
+  category: ChannelType.GuildCategory,
+  text: ChannelType.GuildText,
+  voice: ChannelType.GuildVoice,
+  announcement: ChannelType.GuildAnnouncement,
+};
+
+/** Maps a discord.js channel-type constant back onto an abstract type. */
+const ABSTRACT_CHANNEL_TYPE = new Map(
+  Object.entries(CHANNEL_TYPE).map(([abstract, concrete]) => [concrete, abstract]),
+);
+
+/** Resolves permission-flag names (e.g. 'ViewChannel') to their bitfield values. */
+function resolvePermissionFlags(names = []) {
+  return names.map((name) => {
+    const flag = PermissionFlagsBits[name];
+    if (flag === undefined) throw new Error(`Unknown permission flag: ${name}`);
+    return flag;
+  });
+}
+
+/** Translates the gateway's abstract permission overwrites into discord.js shape. */
+function toDiscordOverwrites(overwrites = []) {
+  return overwrites.map((overwrite) => ({
+    id: overwrite.id,
+    allow: resolvePermissionFlags(overwrite.allow),
+    deny: resolvePermissionFlags(overwrite.deny),
+  }));
+}
 
 /**
  * Real gateway backed by a discord.js client.
@@ -59,6 +97,7 @@ export class DiscordJsRoleGateway {
       available: guild.available !== false,
       botPresent: Boolean(me),
       botCanManageRoles: Boolean(me?.permissions.has(PermissionFlagsBits.ManageRoles)),
+      botCanManageChannels: Boolean(me?.permissions.has(PermissionFlagsBits.ManageChannels)),
       botHighestRolePosition: me?.roles?.highest?.position ?? -1,
     };
   }
@@ -183,6 +222,95 @@ export class DiscordJsRoleGateway {
     }
   }
 
+  /**
+   * Every category and channel in a guild, in the gateway's abstract shape.
+   * Used by server provisioning to decide what already exists and must be skipped.
+   *
+   * @param {string} discordGuildId
+   * @returns {Promise<ChannelSnapshot[]>}
+   */
+  async listChannels(discordGuildId) {
+    const guild = await this.#fetchGuild(discordGuildId);
+    if (!guild) return [];
+    const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    return [...channels.values()]
+      .filter(Boolean)
+      .filter((channel) => ABSTRACT_CHANNEL_TYPE.has(channel.type))
+      .map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        type: ABSTRACT_CHANNEL_TYPE.get(channel.type),
+        parentId: channel.parentId ?? null,
+      }));
+  }
+
+  /**
+   * Creates a role. Only ever used by provisioning, which is why it lives on the same
+   * gateway rather than a second one: the reason string is what shows in the Discord
+   * audit log, so a human can always see the platform created it.
+   *
+   * @param {string} discordGuildId
+   * @param {{name: string, color?: number|string, hoist?: boolean, mentionable?: boolean, permissions?: string[], reason?: string}} spec
+   * @returns {Promise<{id: string, name: string}>}
+   */
+  async createRole(discordGuildId, spec) {
+    try {
+      const guild = await this.#requireGuild(discordGuildId);
+      const role = await guild.roles.create({
+        name: spec.name,
+        color: spec.color ?? undefined,
+        hoist: spec.hoist ?? false,
+        mentionable: spec.mentionable ?? false,
+        permissions: spec.permissions ? resolvePermissionFlags(spec.permissions) : undefined,
+        reason: truncateReason(spec.reason),
+      });
+      return { id: role.id, name: role.name };
+    } catch (error) {
+      log.warn(
+        { discordGuildId, name: spec.name, err: serializeError(error) },
+        'create role failed',
+      );
+      throw mapDiscordError(error, { discordGuildId });
+    }
+  }
+
+  /**
+   * Creates a category or channel.
+   *
+   * @param {string} discordGuildId
+   * @param {{name: string, type: string, parentId?: string|null, topic?: string, permissionOverwrites?: Array<{id: string, allow?: string[], deny?: string[]}>, reason?: string}} spec
+   * @returns {Promise<ChannelSnapshot>}
+   */
+  async createChannel(discordGuildId, spec) {
+    const concreteType = CHANNEL_TYPE[spec.type];
+    if (concreteType === undefined) throw new Error(`Unknown channel type: ${spec.type}`);
+    try {
+      const guild = await this.#requireGuild(discordGuildId);
+      const channel = await guild.channels.create({
+        name: spec.name,
+        type: concreteType,
+        parent: spec.parentId ?? undefined,
+        topic: spec.type === 'text' ? (spec.topic ?? undefined) : undefined,
+        permissionOverwrites: spec.permissionOverwrites
+          ? toDiscordOverwrites(spec.permissionOverwrites)
+          : undefined,
+        reason: truncateReason(spec.reason),
+      });
+      return {
+        id: channel.id,
+        name: channel.name,
+        type: ABSTRACT_CHANNEL_TYPE.get(channel.type) ?? spec.type,
+        parentId: channel.parentId ?? null,
+      };
+    } catch (error) {
+      log.warn(
+        { discordGuildId, name: spec.name, err: serializeError(error) },
+        'create channel failed',
+      );
+      throw mapDiscordError(error, { discordGuildId });
+    }
+  }
+
   /** Leaves a guild. Used when the bot is added to a server that is not approved. */
   async leaveGuild(discordGuildId) {
     const guild = await this.#fetchGuild(discordGuildId);
@@ -248,6 +376,9 @@ export class ReadOnlyGatewayDecorator {
   listMembers(...args) {
     return this.inner.listMembers(...args);
   }
+  listChannels(...args) {
+    return this.inner.listChannels(...args);
+  }
   listGuilds(...args) {
     return this.inner.listGuilds(...args);
   }
@@ -260,6 +391,22 @@ export class ReadOnlyGatewayDecorator {
   async removeRole(discordGuildId, discordUserId, discordRoleId) {
     log.info({ discordGuildId, discordUserId, discordRoleId }, 'mock: would remove role');
     return { applied: false, mocked: true };
+  }
+
+  async createRole(discordGuildId, spec) {
+    log.info({ discordGuildId, name: spec?.name }, 'mock: would create role');
+    return { id: `mock-role-${spec?.name}`, name: spec?.name, mocked: true };
+  }
+
+  async createChannel(discordGuildId, spec) {
+    log.info({ discordGuildId, name: spec?.name, type: spec?.type }, 'mock: would create channel');
+    return {
+      id: `mock-channel-${spec?.name}`,
+      name: spec?.name,
+      type: spec?.type,
+      parentId: null,
+      mocked: true,
+    };
   }
 
   async leaveGuild(discordGuildId) {

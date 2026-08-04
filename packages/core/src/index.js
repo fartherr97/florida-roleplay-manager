@@ -24,3 +24,4 @@ export * from './event-service.js';
 export * from './system-service.js';
 export * from './maintenance-service.js';
 export * from './approval-service.js';
+export * from './setup-service.js';

@@ -19,21 +19,23 @@ Under **Bot → Privileged Gateway Intents**, enable:
 
 ## 3. Bot permissions
 
-The bot needs exactly two permissions:
+The bot needs these permissions:
 
-| Permission         | Why                                                                                                                                                                                           |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Manage Roles**   | To add and remove roles. Without it every write fails with a permanent, non-retryable error.                                                                                                  |
-| **View Audit Log** | Optional but recommended: it lets the bot attribute manual role changes to the person who made them in the audit trail. Everything works without it; the actor is simply recorded as unknown. |
+| Permission          | Why                                                                                                                                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Manage Roles**    | To add and remove roles. Without it every write fails with a permanent, non-retryable error.                                                                                                  |
+| **Manage Channels** | Only needed for `/setup department`, which creates the server's categories and channels. Role synchronization works without it; provisioning refuses to run until the bot has it.             |
+| **View Audit Log**  | Optional but recommended: it lets the bot attribute manual role changes to the person who made them in the audit trail. Everything works without it; the actor is simply recorded as unknown. |
 
-Permission integer: `268435456` (Manage Roles) or `268435584` (with View Audit Log).
+Permission integer: `268435456` (Manage Roles), `268435584` (with View Audit Log), or
+`268435600` (Manage Roles + Manage Channels + View Audit Log — needed for `/setup`).
 
 ## 4. Invite the bot
 
 ```
 https://discord.com/api/oauth2/authorize
   ?client_id=<DISCORD_CLIENT_ID>
-  &permissions=268435584
+  &permissions=268435600
   &scope=bot%20applications.commands
 ```
 

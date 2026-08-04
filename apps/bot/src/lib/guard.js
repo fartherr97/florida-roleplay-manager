@@ -29,12 +29,13 @@ const RATE_LIMIT = { max: 20, windowSeconds: 60 };
 /**
  * Commands allowed to run in a guild that is not (yet) on the allowlist.
  *
- * Registering a server is how the very first guild ever gets onto the allowlist, so it
- * cannot itself require an already-approved guild - that would be an inescapable chicken
- * and egg. This only skips the fail-fast allowlist gate; the real check, that the caller
- * is a global administrator, still runs inside `registerGuild`.
+ * Registering a server is how the very first guild ever gets onto the allowlist, and
+ * provisioning a department server registers it as part of the flow - neither can require
+ * an already-approved guild without an inescapable chicken and egg. This only skips the
+ * fail-fast allowlist gate; the real check, that the caller is a global administrator,
+ * still runs inside `registerGuild` and `provisionDepartment`.
  */
-const ALLOWLIST_EXEMPT = new Set(['guild register']);
+const ALLOWLIST_EXEMPT = new Set(['guild register', 'setup department']);
 
 /**
  * Whether a command may run before its guild is on the allowlist.

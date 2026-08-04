@@ -16,11 +16,21 @@ export class MockRoleGateway {
     this.roles = new Map();
     /** @type {Map<string, Map<string, {id: string, displayName: string, roleIds: Set<string>}>>} */
     this.members = new Map();
+    /** @type {Map<string, Map<string, {id: string, name: string, type: string, parentId: string|null}>>} */
+    this.channels = new Map();
     /** Every write the gateway was asked to perform, in order. */
     this.calls = [];
     /** Queue of errors to throw on the next write, keyed by `${guild}:${user}:${role}`. */
     this.failures = new Map();
     this.leftGuilds = [];
+    /** Monotonic counter so created roles and channels get stable, unique ids. */
+    this.idSeq = 0;
+  }
+
+  /** A fresh, snowflake-shaped id (Discord returns numeric ids, so tests must too). */
+  #nextId() {
+    this.idSeq += 1;
+    return String(960000000000000000n + BigInt(this.idSeq));
   }
 
   // --- test fixtures -------------------------------------------------------
@@ -33,6 +43,7 @@ export class MockRoleGateway {
     available = true,
     botPresent = true,
     botCanManageRoles = true,
+    botCanManageChannels = true,
     botHighestRolePosition = 100,
   }) {
     this.guilds.set(id, {
@@ -41,10 +52,12 @@ export class MockRoleGateway {
       available,
       botPresent,
       botCanManageRoles,
+      botCanManageChannels,
       botHighestRolePosition,
     });
     if (!this.roles.has(id)) this.roles.set(id, new Map());
     if (!this.members.has(id)) this.members.set(id, new Map());
+    if (!this.channels.has(id)) this.channels.set(id, new Map());
     // Every guild has an @everyone role whose id equals the guild id.
     this.roles
       .get(id)
@@ -128,6 +141,43 @@ export class MockRoleGateway {
       displayName: member.displayName,
       roleIds: [...member.roleIds],
     }));
+  }
+
+  /** A pre-existing channel, for testing idempotent provisioning. */
+  defineChannel(guildId, { id, name, type, parentId = null }) {
+    if (!this.channels.has(guildId)) this.channels.set(guildId, new Map());
+    const channelId = id ?? this.#nextId();
+    this.channels.get(guildId).set(channelId, { id: channelId, name, type, parentId });
+    return channelId;
+  }
+
+  async listChannels(discordGuildId) {
+    return [...(this.channels.get(discordGuildId)?.values() ?? [])].map((channel) => ({
+      ...channel,
+    }));
+  }
+
+  async createRole(discordGuildId, spec) {
+    this.calls.push({ action: 'CREATE_ROLE', discordGuildId, name: spec.name });
+    const id = this.#nextId();
+    this.defineRole(discordGuildId, { id, name: spec.name });
+    return { id, name: spec.name };
+  }
+
+  async createChannel(discordGuildId, spec) {
+    this.calls.push({
+      action: 'CREATE_CHANNEL',
+      discordGuildId,
+      name: spec.name,
+      type: spec.type,
+      parentId: spec.parentId ?? null,
+      overwrites: spec.permissionOverwrites ?? [],
+    });
+    const id = this.#nextId();
+    const channel = { id, name: spec.name, type: spec.type, parentId: spec.parentId ?? null };
+    if (!this.channels.has(discordGuildId)) this.channels.set(discordGuildId, new Map());
+    this.channels.get(discordGuildId).set(id, channel);
+    return { ...channel };
   }
 
   async addRole(discordGuildId, discordUserId, discordRoleId, reason) {

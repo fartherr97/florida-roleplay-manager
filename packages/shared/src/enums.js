@@ -202,6 +202,7 @@ export const AuditAction = Object.freeze({
   GUILD_UNAPPROVED_JOIN: 'guild.unapproved_join',
   GUILD_AUTO_LEFT: 'guild.auto_left',
   GUILD_DELETED_EXTERNALLY: 'guild.deleted_externally',
+  GUILD_PROVISIONED: 'guild.provisioned',
 
   MAPPING_CREATED: 'mapping.created',
   MAPPING_UPDATED: 'mapping.updated',

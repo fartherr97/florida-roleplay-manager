@@ -68,6 +68,15 @@ const DEFINITIONS = [
     dangerous: false,
     minLevel: PermissionLevel.STAFF,
   },
+  {
+    key: 'guild.provision',
+    category: 'guild',
+    description:
+      'Provision a department server: create its roles, channels and permissions, and wire it into the platform.',
+    allowedScopes: [GLOBAL],
+    dangerous: true,
+    minLevel: PermissionLevel.GLOBAL_ADMIN,
+  },
 
   // --- Mappings -------------------------------------------------------------
   {
