@@ -1,40 +1,31 @@
 /**
- * Registers slash commands with Discord.
+ * Registers slash commands with Discord from the command line.
  *
  *   node apps/bot/src/scripts/register-commands.js            # global (up to 1h to appear)
  *   node apps/bot/src/scripts/register-commands.js --guild    # per DEV_GUILD_IDS, instant
  *
- * Guild registration is instant, which is what makes iterating on commands bearable
- * during development. Global registration is what production uses.
+ * The bot also registers its commands automatically on startup (see apps/bot/src/index.js),
+ * so this script is only needed for an out-of-band re-registration - for example to push
+ * a command change without redeploying, or to register globally while the running bot is
+ * configured for guild scope.
  */
-import { REST, Routes } from 'discord.js';
 import { getEnv } from '@frm/shared';
-import { commandPayload } from '../commands/index.js';
+import { registerCommands } from '../lib/register.js';
 
 async function main() {
   const env = getEnv({ service: 'bot' });
   const perGuild = process.argv.includes('--guild');
-  const body = commandPayload();
 
-  const rest = new REST({ version: '10' }).setToken(env.DISCORD_BOT_TOKEN);
+  const result = await registerCommands({ env, perGuild });
 
-  if (perGuild) {
-    if (env.DEV_GUILD_IDS.length === 0) {
-      console.error('DEV_GUILD_IDS is empty; nothing to register against.');
-      process.exit(1);
-    }
-    for (const guildId of env.DEV_GUILD_IDS) {
-      await rest.put(Routes.applicationGuildCommands(env.DISCORD_CLIENT_ID, guildId), { body });
-      console.log(`Registered ${body.length} commands in guild ${guildId}`);
-    }
-    return;
+  if (result.scope === 'guild') {
+    console.log(
+      `Registered ${result.count} commands in ${result.guildIds.length} guild(s): ${result.guildIds.join(', ')}`,
+    );
+  } else {
+    console.log(`Registered ${result.count} global commands.`);
+    console.log('Global commands can take up to an hour to appear. Use --guild while developing.');
   }
-
-  await rest.put(Routes.applicationCommands(env.DISCORD_CLIENT_ID), { body });
-  console.log(
-    `Registered ${body.length} global commands: ${body.map((command) => command.name).join(', ')}`,
-  );
-  console.log('Global commands can take up to an hour to appear. Use --guild while developing.');
 }
 
 main().catch((error) => {

@@ -15,6 +15,7 @@ import { closeQueues, closeRedis } from '@frm/queue';
 import { getEnv } from '@frm/shared';
 import { isGuildApproved } from '@frm/core';
 import { registerEventHandlers } from './events.js';
+import { registerCommands } from './lib/register.js';
 
 const log = createLogger('bot');
 
@@ -30,6 +31,19 @@ async function main() {
 
   const { gateway, client } = await createGatewayFromEnv({ cacheMembers: true });
   registerEventHandlers(client, { gateway });
+
+  // Register slash commands on boot so a fresh deployment is usable without a separate
+  // step: guild-scoped (instant) when DEV_GUILD_IDS is set, global otherwise. Never
+  // fatal - a registration hiccup must not take an otherwise-healthy bot offline.
+  try {
+    const registered = await registerCommands({ env });
+    log.info(
+      { scope: registered.scope, count: registered.count, guilds: registered.guildIds },
+      'slash commands registered',
+    );
+  } catch (error) {
+    log.error({ err: serializeError(error) }, 'slash command registration failed; continuing');
+  }
 
   await auditStartupGuilds(client);
 
