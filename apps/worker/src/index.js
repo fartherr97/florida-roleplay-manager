@@ -10,7 +10,7 @@ process.env.FRM_SERVICE = process.env.FRM_SERVICE ?? 'worker';
 
 import { Worker } from 'bullmq';
 import { createLogger, serializeError } from '@frm/logging';
-import { disconnectPrisma, getPrisma } from '@frm/database';
+import { disconnectPrisma, waitForDatabase } from '@frm/database';
 import { closeQueues, closeRedis, getBullConnection, scheduleMaintenanceJobs } from '@frm/queue';
 import { QUEUE_NAMES, getEnv } from '@frm/shared';
 import { createGatewayFromEnv } from '@frm/discord';
@@ -30,6 +30,11 @@ async function main() {
     { nodeEnv: env.NODE_ENV, devMode: env.devMode, concurrency: env.WORKER_CONCURRENCY },
     'starting worker',
   );
+
+  // Wait for the database up front, before logging in to Discord or spinning up queues:
+  // a fresh container's private network may not be ready in its first second, and a bare
+  // check there would crash-loop a healthy database.
+  await waitForDatabase();
 
   const { gateway, client } = await createGatewayFromEnv({ cacheMembers: false });
   const connection = getBullConnection();
@@ -73,8 +78,6 @@ async function main() {
 
   await scheduleMaintenanceJobs();
 
-  // Verify the database is actually reachable before declaring readiness.
-  await getPrisma().$queryRaw`SELECT 1`;
   log.info({ queues: workers.map((worker) => worker.name) }, 'worker ready');
 
   const shutdown = async (signal) => {

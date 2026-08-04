@@ -4,6 +4,7 @@
  * A single client per process. Prisma manages its own connection pool, so creating
  * more than one leaks connections and eventually exhausts Postgres.
  */
+import { setTimeout as sleep } from 'node:timers/promises';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { createLogger, serializeError } from '@frm/logging';
 import { DependencyUnavailableError, getEnv } from '@frm/shared';
@@ -33,6 +34,46 @@ function createClient() {
 export function getPrisma() {
   if (!client) client = createClient();
   return client;
+}
+
+/**
+ * Waits for the database to accept a connection, retrying with backoff.
+ *
+ * On a platform with private networking (Railway, Fly, Render), the link between a
+ * freshly started container and the database is not always ready in the first second of
+ * the container's life. A process that runs a single `SELECT 1` at boot and exits on
+ * failure will crash-loop against a database that is perfectly healthy - it just was not
+ * reachable yet. Retrying rides out that window while still failing closed if the
+ * database is genuinely down: a wrong password or a missing database is not a connection
+ * error, so it is thrown immediately rather than retried into a long, pointless wait.
+ *
+ * @param {object} [options]
+ * @param {number} [options.attempts] total attempts before giving up
+ * @param {number} [options.baseDelayMs] first backoff; doubles each attempt, capped at 5s
+ * @param {import('@prisma/client').PrismaClient} [options.prisma]
+ */
+export async function waitForDatabase({ attempts = 10, baseDelayMs = 500, prisma } = {}) {
+  const db = prisma ?? getPrisma();
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await db.$queryRaw`SELECT 1`;
+      if (attempt > 1) log.info({ attempt }, 'database reachable');
+      return;
+    } catch (error) {
+      // Only a genuine reachability failure is worth waiting on. Anything else (bad
+      // credentials, missing database) will never resolve by waiting, so surface it now.
+      if (!isConnectionError(error) || attempt === attempts) {
+        throw error;
+      }
+      const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 1), 5000);
+      log.warn(
+        { attempt, attempts, delayMs },
+        'database not reachable yet; retrying (private network may still be starting)',
+      );
+      await sleep(delayMs);
+    }
+  }
 }
 
 /** Closes the connection pool. Called from graceful shutdown handlers. */

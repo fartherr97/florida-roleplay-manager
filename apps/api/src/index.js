@@ -8,7 +8,7 @@
 process.env.FRM_SERVICE = process.env.FRM_SERVICE ?? 'api';
 
 import { createLogger, serializeError } from '@frm/logging';
-import { disconnectPrisma, getPrisma } from '@frm/database';
+import { disconnectPrisma, waitForDatabase } from '@frm/database';
 import { closeQueues, closeRedis } from '@frm/queue';
 import { getEnv } from '@frm/shared';
 import { buildApp } from './app.js';
@@ -19,8 +19,9 @@ async function main() {
   const env = getEnv({ service: 'api' });
 
   // Fail closed before binding a port: an API that accepts requests it cannot serve is
-  // worse than one that visibly failed to start.
-  await getPrisma().$queryRaw`SELECT 1`;
+  // worse than one that visibly failed to start. Retry first so a fresh container does
+  // not crash-loop while its private network to the database is still coming up.
+  await waitForDatabase();
 
   const app = await buildApp();
   await app.listen({ host: env.API_HOST, port: env.API_PORT });

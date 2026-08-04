@@ -9,7 +9,7 @@
 process.env.FRM_SERVICE = process.env.FRM_SERVICE ?? 'bot';
 
 import { createLogger, serializeError } from '@frm/logging';
-import { disconnectPrisma, getPrisma } from '@frm/database';
+import { disconnectPrisma, waitForDatabase } from '@frm/database';
 import { createGatewayFromEnv } from '@frm/discord';
 import { closeQueues, closeRedis } from '@frm/queue';
 import { getEnv } from '@frm/shared';
@@ -22,10 +22,11 @@ async function main() {
   const env = getEnv({ service: 'bot' });
   log.info({ nodeEnv: env.NODE_ENV, devMode: env.devMode, mock: env.DISCORD_MOCK }, 'starting bot');
 
-  // Fail fast if the database is unreachable: without it every command would fail
-  // anyway, and a bot that appears online but rejects everything is worse than one that
-  // is visibly down.
-  await getPrisma().$queryRaw`SELECT 1`;
+  // The database must be reachable before the bot goes online: without it every command
+  // would fail, and a bot that appears online but rejects everything is worse than one
+  // that is visibly down. Retry first, so a slow-to-initialise private network on a
+  // fresh container does not crash-loop a perfectly healthy database.
+  await waitForDatabase();
 
   const { gateway, client } = await createGatewayFromEnv({ cacheMembers: true });
   registerEventHandlers(client, { gateway });
