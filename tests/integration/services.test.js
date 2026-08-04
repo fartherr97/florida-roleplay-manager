@@ -9,6 +9,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   createMapping,
   discordContext,
+  getSystemHealth,
   grantPermission,
   isGuildApproved,
   issueGrant,
@@ -559,6 +560,26 @@ describe.skipIf(!available)('core services', () => {
       });
       expect(mapping.enabled).toBe(false);
       expect(warnings.join(' ')).toMatch(/could not be validated/i);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('system health', () => {
+    it('reports live counts and touches no removed model', async () => {
+      const health = await getSystemHealth(adminCtx, { gateway });
+
+      expect(health.database.ok).toBe(true);
+      expect(health.discord.ok).toBe(true);
+      expect(health.counts.guilds).toBe(3); // the fixture seeds three approved guilds
+      expect(health.counts.managedRoles).toBeGreaterThan(0);
+      expect(typeof health.counts.members).toBe('number');
+      // The roster subsystem is gone; its count must never reappear here (this is the
+      // regression that made `/system health` throw against a real database).
+      expect(health.counts).not.toHaveProperty('departments');
+    });
+
+    it('requires system.manage', async () => {
+      await expect(getSystemHealth(guildAdminCtx, { gateway })).rejects.toThrow(/system.manage/i);
     });
   });
 });

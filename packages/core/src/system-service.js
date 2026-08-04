@@ -70,25 +70,54 @@ async function checkDatabase(prisma) {
   }
 }
 
-async function checkRedis() {
-  const started = Date.now();
+/** How long any single health probe may take before it is reported as unreachable. */
+const PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Bounds a health probe so a wedged dependency degrades to "unreachable" instead of
+ * hanging the whole check. This matters most for Redis: the BullMQ connection retries
+ * forever by design (`maxRetriesPerRequest: null`), so a queue-stats call against an
+ * unreachable Redis never rejects on its own - and a health command that hangs when
+ * Redis is down is useless exactly when it is needed.
+ */
+async function withProbeTimeout(operation, onTimeout) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(onTimeout), PROBE_TIMEOUT_MS);
+    timer.unref?.();
+  });
   try {
-    const pong = await getRedis().ping();
-    return { ok: pong === 'PONG', latencyMs: Date.now() - started };
+    return await Promise.race([Promise.resolve().then(operation), timeout]);
   } catch (error) {
-    log.error({ err: serializeError(error) }, 'redis health check failed');
-    return { ok: false, error: 'unreachable' };
+    return { ...onTimeout, detail: error?.message };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-async function checkQueues() {
-  try {
-    const stats = await getQueueStats();
-    const failed = Object.values(stats).reduce((total, counts) => total + (counts.failed ?? 0), 0);
-    return { ok: true, stats, failed };
-  } catch (error) {
-    return { ok: false, error: 'unreachable', detail: error?.message };
-  }
+function checkRedis() {
+  const started = Date.now();
+  return withProbeTimeout(
+    async () => {
+      const pong = await getRedis().ping();
+      return { ok: pong === 'PONG', latencyMs: Date.now() - started };
+    },
+    { ok: false, error: 'unreachable' },
+  );
+}
+
+function checkQueues() {
+  return withProbeTimeout(
+    async () => {
+      const stats = await getQueueStats();
+      const failed = Object.values(stats).reduce(
+        (total, counts) => total + (counts.failed ?? 0),
+        0,
+      );
+      return { ok: true, stats, failed };
+    },
+    { ok: false, error: 'unreachable' },
+  );
 }
 
 async function checkDiscord(gateway) {
@@ -102,17 +131,14 @@ async function checkDiscord(gateway) {
 }
 
 async function countEntities(prisma) {
-  const [guilds, departments, members, mappings, enabledMappings, managedRoles] = await Promise.all(
-    [
-      prisma.approvedGuild.count({ where: { ...notDeleted, enabled: true } }),
-      prisma.department.count({ where: { ...notDeleted, enabled: true } }),
-      prisma.user.count({ where: notDeleted }),
-      prisma.roleMapping.count({ where: notDeleted }),
-      prisma.roleMapping.count({ where: { ...notDeleted, enabled: true } }),
-      prisma.managedRole.count({ where: notDeleted }),
-    ],
-  );
-  return { guilds, departments, members, mappings, enabledMappings, managedRoles };
+  const [guilds, members, mappings, enabledMappings, managedRoles] = await Promise.all([
+    prisma.approvedGuild.count({ where: { ...notDeleted, enabled: true } }),
+    prisma.user.count({ where: notDeleted }),
+    prisma.roleMapping.count({ where: notDeleted }),
+    prisma.roleMapping.count({ where: { ...notDeleted, enabled: true } }),
+    prisma.managedRole.count({ where: notDeleted }),
+  ]);
+  return { guilds, members, mappings, enabledMappings, managedRoles };
 }
 
 /** Jobs that have been running for over an hour are almost certainly wedged. */
