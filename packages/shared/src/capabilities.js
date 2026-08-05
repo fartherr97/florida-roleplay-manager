@@ -153,6 +153,15 @@ const DEFINITIONS = [
     dangerous: false,
     minLevel: PermissionLevel.COMMAND,
   },
+  {
+    key: 'rolegrant.manage',
+    category: 'role',
+    description:
+      'Edit the self-service role delegation rules: which roles may hand out which other roles.',
+    allowedScopes: [GLOBAL, GUILD],
+    dangerous: true,
+    minLevel: PermissionLevel.STAFF,
+  },
 
   // --- Synchronization ------------------------------------------------------
   {

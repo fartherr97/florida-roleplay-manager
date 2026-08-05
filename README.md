@@ -20,6 +20,10 @@ a member's role list is left strictly alone.
   synchronization loop.
 - **Manual role grants.** Time-bounded, audited, and automatically taken back when they
   are revoked or expire — nobody has to remember.
+- **Self-service role delegation.** `/rolemanager` lets a member who holds a configured
+  role hand out (and take back) a set of other roles, several at a time from a menu, without
+  any bot or admin permission. An admin edits the "which role can give out which" mapping
+  with `/rolemanager config`, and anyone can see it with `/rolemanager view`.
 - **A reconciliation engine.** Desired state − actual state = required changes.
   Deterministic, idempotent, and it never removes a role whose correct value it cannot
   compute.

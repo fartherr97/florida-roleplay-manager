@@ -218,6 +218,11 @@ export const AuditAction = Object.freeze({
   GRANT_ISSUED: 'grant.issued',
   GRANT_REVOKED: 'grant.revoked',
 
+  ROLE_GRANT_RULE_ADDED: 'role_grant.rule_added',
+  ROLE_GRANT_RULE_REMOVED: 'role_grant.rule_removed',
+  ROLE_SELF_SERVICE_ASSIGNED: 'role_grant.assigned',
+  ROLE_SELF_SERVICE_REMOVED: 'role_grant.removed',
+
   MEMBER_LINKED: 'member.linked',
   MEMBER_UNLINKED: 'member.unlinked',
 

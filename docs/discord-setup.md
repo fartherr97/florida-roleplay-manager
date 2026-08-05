@@ -164,3 +164,44 @@ audited action (`/member link`).
 
 Create it in a private staff channel — **Channel Settings → Integrations → Webhooks**. The
 URL is a secret and is redacted from logs.
+
+## 10. Self-service role delegation (`/rolemanager`)
+
+`/rolemanager` lets trusted members hand out roles without giving them the bot's admin
+commands or Discord's Manage Roles permission. The rule it works from is simple: a member
+who holds a **grantor** role may assign and remove the **grantable** roles that grantor role
+is mapped to.
+
+**Set up the mapping** (needs the `rolegrant.manage` capability — global admins have it):
+
+```
+/rolemanager config add grantor:@Recruiter      # then pick the roles it may hand out
+/rolemanager config remove grantor:@Recruiter   # then pick roles to stop it handing out
+```
+
+The picker for grantable roles is a role menu, so you can add several at once. Prefer roles
+the platform does not manage — if you delegate a role that is part of a mapping or a managed
+grant, reconciliation may remove it again, and the editor warns you when that is the case.
+
+**Hand roles out.** Anyone holding a grantor role can then:
+
+```
+/rolemanager assign member:@Someone   # pick roles to add (defaults to yourself)
+/rolemanager remove member:@Someone   # pick roles to take back
+```
+
+The menu only offers the roles that caller is actually allowed to manage, and only the ones
+the change would affect (roles the member lacks for assign, roles they have for remove).
+Every write goes through the same safety check the sync engine uses, so a member can never
+hand out a role that sits above the bot in the hierarchy — that role simply fails and the
+rest still apply.
+
+**See the mapping.** Open to everyone:
+
+```
+/rolemanager view
+```
+
+Two things to know: the person running `/rolemanager` must be a linked member (as with every
+command), but the person they assign roles to does not need an account; and the whole feature
+is per server — the rules and the roles live in the guild where you run it.

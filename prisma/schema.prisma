@@ -195,6 +195,7 @@ model User {
   resolvedApprovals   PendingApproval[]      @relation("ApprovalResolver")
   approvalVotes       PendingApprovalVote[]
   systemSettings      SystemSetting[]        @relation("SettingUpdater")
+  createdGrantRules   RoleGrantRule[]        @relation("RoleGrantRuleCreator")
 
   @@index([status])
   @@index([deletedAt])
@@ -252,6 +253,7 @@ model ApprovedGuild {
   managedRoles   ManagedRole[]
   sourceMappings RoleMapping[] @relation("MappingSourceGuild")
   targetMappings RoleMapping[] @relation("MappingTargetGuild")
+  roleGrantRules RoleGrantRule[]
   syncJobs       SyncJob[]
   syncActions    SyncAction[]
   syncIssues     SyncIssue[]
@@ -355,6 +357,35 @@ model RoleMapping {
   @@index([enabled])
   @@index([deletedAt])
   @@map("role_mappings")
+}
+
+/// Self-service role delegation. In a guild, a member holding `grantorRoleId` may hand out
+/// (and take back) `grantableRoleId` through `/rolemanager`, without any platform
+/// capability. One row per (grantor, grantable) pair; the mapping is edited by an admin.
+///
+/// These are ordinarily roles the platform does NOT manage (cosmetic, notification, or
+/// access roles), so reconciliation never touches them - this feature is the only writer.
+model RoleGrantRule {
+  id                String    @id @default(uuid()) @db.Uuid
+  approvedGuildId   String    @db.Uuid
+  /// The Discord role a member must hold to be allowed to hand out the grantable role.
+  grantorRoleId     String
+  grantorRoleName   String
+  /// The Discord role that may be assigned or removed.
+  grantableRoleId   String
+  grantableRoleName String
+  createdById       String?   @db.Uuid
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
+
+  guild     ApprovedGuild @relation(fields: [approvedGuildId], references: [id], onDelete: Cascade)
+  createdBy User?         @relation("RoleGrantRuleCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([approvedGuildId, grantorRoleId, grantableRoleId])
+  @@index([approvedGuildId, grantorRoleId])
+  @@index([deletedAt])
+  @@map("role_grant_rules")
 }
 
 // ---------------------------------------------------------------------------

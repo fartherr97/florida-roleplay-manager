@@ -205,6 +205,41 @@ export const listGrantsSchema = pagination.extend({
 });
 
 // ---------------------------------------------------------------------------
+// Self-service role delegation (/rolemanager)
+// ---------------------------------------------------------------------------
+
+/** A Discord role reference carrying its name, so rules stay readable after edits. */
+const roleRef = z.object({ id: snowflake, name: z.string().trim().min(1).max(100) });
+
+export const listGrantRulesSchema = z.object({
+  discordGuildId: snowflake,
+});
+
+export const addGrantRuleSchema = z.object({
+  discordGuildId: snowflake,
+  grantor: roleRef,
+  // Up to a select menu's worth of roles the grantor role may hand out.
+  grantables: z.array(roleRef).min(1).max(25),
+  reason: optionalReason,
+});
+
+export const removeGrantRuleSchema = z.object({
+  discordGuildId: snowflake,
+  grantorRoleId: snowflake,
+  // Omit to remove every grantable role for this grantor.
+  grantableRoleIds: z.array(snowflake).max(25).optional(),
+  reason: optionalReason,
+});
+
+export const applyRoleAssignmentSchema = z.object({
+  discordGuildId: snowflake,
+  targetDiscordUserId: snowflake,
+  roleIds: z.array(snowflake).min(1).max(25),
+  remove: booleanFlag.default(false),
+  reason: optionalReason,
+});
+
+// ---------------------------------------------------------------------------
 // Members
 // ---------------------------------------------------------------------------
 
