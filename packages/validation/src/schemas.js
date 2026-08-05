@@ -10,6 +10,7 @@ import {
   CAPABILITY_KEYS,
   GuildType,
   MappingDirection,
+  PermissionLevel,
   PermissionScopeType,
   RolePurpose,
   SyncIssueType,
@@ -236,6 +237,28 @@ export const applyRoleAssignmentSchema = z.object({
   targetDiscordUserId: snowflake,
   roleIds: z.array(snowflake).min(1).max(25),
   remove: booleanFlag.default(false),
+  reason: optionalReason,
+});
+
+// ---------------------------------------------------------------------------
+// Discord-role access tiers (/access)
+// ---------------------------------------------------------------------------
+
+/** The authority tiers a main-guild role may be mapped to (MEMBER is not a grant). */
+const accessTierLevels = Object.values(PermissionLevel).filter((level) => level > 0);
+
+export const setAccessTierSchema = z.object({
+  discordRoleId: snowflake,
+  roleName: z.string().trim().min(1).max(100),
+  level: z
+    .number()
+    .int()
+    .refine((value) => accessTierLevels.includes(value), 'Not a valid authority tier'),
+  reason: optionalReason,
+});
+
+export const removeAccessTierSchema = z.object({
+  discordRoleId: snowflake,
   reason: optionalReason,
 });
 

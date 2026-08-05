@@ -266,6 +266,15 @@ const DEFINITIONS = [
     dangerous: true,
     minLevel: PermissionLevel.GLOBAL_ADMIN,
   },
+  {
+    key: 'access.manage',
+    category: 'system',
+    description:
+      'Map main-guild Discord roles to authority tiers, granting bot access by role. Deliberately never granted by a tier itself.',
+    allowedScopes: [GLOBAL],
+    dangerous: true,
+    minLevel: PermissionLevel.GLOBAL_ADMIN,
+  },
 ];
 
 /** @type {ReadonlyMap<string, CapabilityDefinition>} */

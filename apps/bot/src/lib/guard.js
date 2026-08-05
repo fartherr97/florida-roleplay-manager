@@ -15,8 +15,7 @@
  */
 import { MessageFlags } from 'discord.js';
 import { createLogger } from '@frm/logging';
-import { loadActorByDiscordId } from '@frm/authorization';
-import { discordContext, isGuildApproved } from '@frm/core';
+import { discordContext, isGuildApproved, resolveDiscordActor } from '@frm/core';
 import { getRedis } from '@frm/queue';
 import { REDIS_PREFIX, RateLimitError, newRequestId } from '@frm/shared';
 import { errorEmbed, renderError } from './ui.js';
@@ -57,9 +56,11 @@ function subcommandOf(interaction) {
 
 /**
  * @param {import('discord.js').Interaction} interaction
+ * @param {{gateway?: object}} [deps] the gateway, used to read the caller's main-guild roles
+ *   for Discord-role-driven access tiers
  * @returns {Promise<{ok: false} | {ok: true, ctx: object, requestId: string}>}
  */
-export async function guardInteraction(interaction) {
+export async function guardInteraction(interaction, { gateway } = {}) {
   const requestId = newRequestId();
 
   if (!interaction.inGuild()) {
@@ -104,7 +105,18 @@ export async function guardInteraction(interaction) {
   }
 
   try {
-    const actor = await loadActorByDiscordId(interaction.user.id);
+    // Discord-role access tiers are layered on here: `resolveDiscordActor` reads the
+    // caller's live main-guild roles (via the gateway) and raises the actor accordingly,
+    // auto-provisioning an account for an unlinked role-holder.
+    const actor = await resolveDiscordActor({
+      discordUserId: interaction.user.id,
+      displayName:
+        interaction.member?.displayName ??
+        interaction.user?.globalName ??
+        interaction.user?.username ??
+        null,
+      gateway,
+    });
     const ctx = discordContext(actor, { requestId, discordGuildId: interaction.guildId });
     return { ok: true, ctx, requestId };
   } catch (error) {

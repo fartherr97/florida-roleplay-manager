@@ -205,3 +205,36 @@ rest still apply.
 Two things to know: the person running `/rolemanager` must be a linked member (as with every
 command), but the person they assign roles to does not need an account; and the whole feature
 is per server — the rules and the roles live in the guild where you run it.
+
+## 11. Bot access by Discord role (`/access`)
+
+Instead of granting bot capabilities to each administrator by hand, you can drive access off
+the roles you already have in your **main community server**. Map a role to an authority
+tier, and anyone who holds that role gets every command up to that tier — resolved live from
+their Discord roles, so the moment they lose the role they lose the access.
+
+Run these from the main community server (the role picker only offers that server's roles),
+and you need the `access.manage` capability, which global admins have:
+
+```
+/access grant role:@Staff tier:Staff       # holders get every command up to the Staff tier
+/access grant role:@Supervisor tier:Supervisor
+/access revoke role:@Staff                  # stop a role granting access
+/access list                                # see the current mapping
+```
+
+The tiers, low to high, are **Supervisor → Command → Manager → Staff → Admin**. Higher tiers
+include everything below them; **Admin** is full access. A member who holds several mapped
+roles gets the highest.
+
+Two deliberate design points worth knowing:
+
+- **A member does not need a linked account.** The first time someone with a mapped role runs
+  a command, a lightweight account is created for them automatically, so it "just works" for
+  your whole staff team. Every action is still audited to that account.
+- **A tier never grants `/access` itself.** No matter how high, a Discord-role tier cannot
+  reconfigure the access mapping — that stays with your real global admins
+  (`GLOBAL_ADMIN_DISCORD_IDS`). This stops "whoever controls a Discord role controls who is an
+  admin" from becoming a way to escalate. Because the mapping is that powerful, treat the
+  Admin tier like handing out the keys: whoever can assign that Discord role becomes a full
+  bot administrator.

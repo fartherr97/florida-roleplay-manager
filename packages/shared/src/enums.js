@@ -225,6 +225,10 @@ export const AuditAction = Object.freeze({
 
   MEMBER_LINKED: 'member.linked',
   MEMBER_UNLINKED: 'member.unlinked',
+  MEMBER_AUTO_PROVISIONED: 'member.auto_provisioned',
+
+  ACCESS_TIER_SET: 'access.tier_set',
+  ACCESS_TIER_REMOVED: 'access.tier_removed',
 
   SYNC_JOB_CREATED: 'sync.job_created',
   SYNC_JOB_COMPLETED: 'sync.job_completed',

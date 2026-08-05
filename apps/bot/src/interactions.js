@@ -21,7 +21,7 @@ const log = createLogger('bot.interactions');
  */
 export async function handleInteraction(interaction, { gateway }) {
   if (interaction.isAutocomplete()) {
-    const guard = await guardAutocomplete(interaction);
+    const guard = await guardAutocomplete(interaction, { gateway });
     if (!guard) return;
     return handleAutocomplete(interaction, { ctx: guard.ctx, gateway });
   }
@@ -38,7 +38,7 @@ export async function handleInteraction(interaction, { gateway }) {
     return undefined;
   }
 
-  const guard = await guardInteraction(interaction);
+  const guard = await guardInteraction(interaction, { gateway });
   if (!guard.ok) return undefined;
 
   const { ctx, requestId } = guard;
@@ -87,13 +87,13 @@ export async function handleInteraction(interaction, { gateway }) {
  * Autocomplete needs an actor for scope filtering but must never reply with an error
  * embed: Discord only accepts a choice list here. Failures degrade to an empty list.
  */
-async function guardAutocomplete(interaction) {
+async function guardAutocomplete(interaction, { gateway } = {}) {
   try {
     if (!interaction.inGuild()) {
       await interaction.respond([]);
       return null;
     }
-    const guard = await guardInteraction(interaction);
+    const guard = await guardInteraction(interaction, { gateway });
     if (!guard.ok) {
       await interaction.respond([]).catch(() => {});
       return null;

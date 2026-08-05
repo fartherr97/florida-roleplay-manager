@@ -196,6 +196,7 @@ model User {
   approvalVotes       PendingApprovalVote[]
   systemSettings      SystemSetting[]        @relation("SettingUpdater")
   createdGrantRules   RoleGrantRule[]        @relation("RoleGrantRuleCreator")
+  createdAccessTiers  RoleAccessTier[]       @relation("AccessTierCreator")
 
   @@index([status])
   @@index([deletedAt])
@@ -386,6 +387,31 @@ model RoleGrantRule {
   @@index([approvedGuildId, grantorRoleId])
   @@index([deletedAt])
   @@map("role_grant_rules")
+}
+
+/// Discord-role-driven access. A role in the main community guild is mapped to an authority
+/// tier; a member who holds it is treated, at command time, as having that tier and every
+/// capability up to it - without an explicit permission grant. This is how a community runs
+/// bot access off its existing staff roles instead of provisioning each person by hand.
+///
+/// The mapping is resolved live from the member's current Discord roles, so losing the role
+/// loses the access on the next command. It never persists authority onto the account.
+model RoleAccessTier {
+  id              String    @id @default(uuid()) @db.Uuid
+  /// A role in the main community guild.
+  discordRoleId   String    @unique
+  roleName        String
+  /// The authority tier (0-100) holders are granted; see PermissionLevel.
+  permissionLevel Int
+  createdById     String?   @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  createdBy User? @relation("AccessTierCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([deletedAt])
+  @@map("role_access_tiers")
 }
 
 // ---------------------------------------------------------------------------

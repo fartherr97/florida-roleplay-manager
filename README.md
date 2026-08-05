@@ -24,6 +24,10 @@ a member's role list is left strictly alone.
   role hand out (and take back) a set of other roles, several at a time from a menu, without
   any bot or admin permission. An admin edits the "which role can give out which" mapping
   with `/rolemanager config`, and anyone can see it with `/rolemanager view`.
+- **Discord-role access tiers.** `/access` maps a main-server role to an authority tier
+  (Supervisor → Admin); holding the role unlocks every bot command up to that tier, resolved
+  live from the member's roles — so a community runs bot access off its existing staff roles
+  instead of granting each person by hand. Losing the role loses the access immediately.
 - **A reconciliation engine.** Desired state − actual state = required changes.
   Deterministic, idempotent, and it never removes a role whose correct value it cannot
   compute.

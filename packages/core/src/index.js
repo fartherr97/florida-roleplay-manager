@@ -19,6 +19,7 @@ export * from './permission-service.js';
 export * from './managed-role-service.js';
 export * from './grant-service.js';
 export * from './role-grant-service.js';
+export * from './access-service.js';
 export * from './sync-service.js';
 export * from './sync-runner.js';
 export * from './event-service.js';

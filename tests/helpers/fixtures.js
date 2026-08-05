@@ -67,7 +67,7 @@ export async function resetDatabase() {
       audit_logs, sync_issues, sync_actions, sync_jobs,
       pending_approval_votes, pending_approvals,
       permission_assignments, manual_role_grants,
-      role_grant_rules, role_mappings, managed_roles, approved_guilds,
+      role_grant_rules, role_access_tiers, role_mappings, managed_roles, approved_guilds,
       discord_identities, users, system_settings
     RESTART IDENTITY CASCADE
   `);

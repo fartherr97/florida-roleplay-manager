@@ -4,6 +4,7 @@
  * Adding a command means adding it to this list and nothing else: registration with
  * Discord, routing and autocomplete all read from here.
  */
+import * as access from './access.js';
 import * as audit from './audit.js';
 import * as guild from './guild.js';
 import * as mapping from './mapping.js';
@@ -16,6 +17,7 @@ import * as setup from './setup.js';
 import * as system from './system.js';
 
 const MODULES = [
+  access,
   audit,
   guild,
   mapping,
