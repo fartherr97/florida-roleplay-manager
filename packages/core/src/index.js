@@ -25,3 +25,4 @@ export * from './system-service.js';
 export * from './maintenance-service.js';
 export * from './approval-service.js';
 export * from './setup-service.js';
+export * from './bootstrap-service.js';

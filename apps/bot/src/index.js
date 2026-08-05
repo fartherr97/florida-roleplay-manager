@@ -13,7 +13,7 @@ import { disconnectPrisma, waitForDatabase } from '@frm/database';
 import { createGatewayFromEnv } from '@frm/discord';
 import { closeQueues, closeRedis } from '@frm/queue';
 import { getEnv } from '@frm/shared';
-import { isGuildApproved } from '@frm/core';
+import { isGuildApproved, reconcileGlobalAdminsSafely } from '@frm/core';
 import { registerEventHandlers } from './events.js';
 import { registerCommands } from './lib/register.js';
 
@@ -28,6 +28,15 @@ async function main() {
   // that is visibly down. Retry first, so a slow-to-initialise private network on a
   // fresh container does not crash-loop a perfectly healthy database.
   await waitForDatabase();
+
+  // Make sure the root administrators (GLOBAL_ADMIN_DISCORD_IDS) hold every capability,
+  // including any added since the last database seed. Self-healing and idempotent, so a
+  // newly shipped capability reaches them on the next boot without a separate re-seed.
+  const admins = await reconcileGlobalAdminsSafely({ env });
+  log.info(
+    { admins: admins.admins, capabilities: admins.capabilities },
+    'global admins reconciled',
+  );
 
   const { gateway, client } = await createGatewayFromEnv({ cacheMembers: true });
   registerEventHandlers(client, { gateway });
