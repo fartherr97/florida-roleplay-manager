@@ -43,11 +43,20 @@ The Discord account has no member record. Somebody with `member.link` runs:
 
 ### Commands do not appear in Discord
 
-- Global registration takes up to an hour. Use `npm run commands:register -- --guild` while
-  developing.
 - The bot must have been invited with the `applications.commands` scope. Re-inviting with
   the correct scope fixes it without kicking it.
 - Check the bot is actually online: `/system health`, or the process logs.
+- Global registration (empty `DEV_GUILD_IDS`) takes up to an hour to propagate.
+
+### Commands appear in some servers but not a newly joined one
+
+Almost always a registration-scope issue. In guild scope (`DEV_GUILD_IDS` set) the bot
+registers commands in every server it is in on boot, and again when it joins a new one - but
+a server invited while `DEV_GUILD_IDS` was empty (global mode) never got guild-scoped
+commands. Set `DEV_GUILD_IDS` to at least your main server's ID and redeploy the bot: it
+registers every server it is currently in. In global mode the new server is covered too, but
+only after up to an hour. Do not run both modes at once - a server registered globally and
+per-guild shows every command twice; `npm run commands:clear` removes the global set.
 
 ### "You do not have the … permission"
 

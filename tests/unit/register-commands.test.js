@@ -29,7 +29,8 @@ vi.mock('../../apps/bot/src/commands/index.js', () => ({
   commandPayload: () => [{ name: 'role' }, { name: 'guild' }],
 }));
 
-const { registerCommands } = await import('../../apps/bot/src/lib/register.js');
+const { registerCommands, registerGuildCommands } =
+  await import('../../apps/bot/src/lib/register.js');
 
 const baseEnv = { DISCORD_BOT_TOKEN: 'token', DISCORD_CLIENT_ID: '111111111111111111' };
 
@@ -76,5 +77,41 @@ describe('registerCommands', () => {
       registerCommands({ env: { ...baseEnv, DEV_GUILD_IDS: [] }, perGuild: true }),
     ).rejects.toThrow(/DEV_GUILD_IDS is empty/i);
     expect(put).not.toHaveBeenCalled();
+  });
+
+  it('registers the boot union of DEV_GUILD_IDS and currently-joined guilds', async () => {
+    const result = await registerCommands({
+      env: { ...baseEnv, DEV_GUILD_IDS: ['222222222222222222'] },
+      guildIds: ['222222222222222222', '444444444444444444'],
+    });
+
+    expect(result.guildIds).toEqual(['222222222222222222', '444444444444444444']);
+    expect(put).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('registerGuildCommands', () => {
+  beforeEach(() => put.mockClear());
+
+  it('registers the command set in a single newly joined guild', async () => {
+    const result = await registerGuildCommands({
+      env: baseEnv,
+      guildIds: ['555555555555555555'],
+    });
+
+    expect(result).toEqual({ scope: 'guild', count: 2, guildIds: ['555555555555555555'] });
+    expect(put).toHaveBeenCalledExactlyOnceWith('guild:111111111111111111:555555555555555555', {
+      body: [{ name: 'role' }, { name: 'guild' }],
+    });
+  });
+
+  it('ignores empty and duplicate guild ids', async () => {
+    const result = await registerGuildCommands({
+      env: baseEnv,
+      guildIds: ['555555555555555555', '555555555555555555', '', null],
+    });
+
+    expect(result.guildIds).toEqual(['555555555555555555']);
+    expect(put).toHaveBeenCalledTimes(1);
   });
 });

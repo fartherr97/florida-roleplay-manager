@@ -81,12 +81,31 @@ Two kinds of role can never be managed, regardless of hierarchy:
 
 ## 6. Register the slash commands
 
+The bot registers its commands automatically on every boot, so a normal deploy needs no
+separate step. What it does depends on `DEV_GUILD_IDS`:
+
+- **`DEV_GUILD_IDS` set (guild-scoped, instant).** On boot it registers the commands in
+  every server the bot is currently in, and again the moment it joins (and stays in) a new
+  one. This is the right choice for a fixed set of servers - one community plus a handful of
+  departments - because commands appear immediately, with no propagation delay. Set it to
+  at least your main community server's ID.
+- **`DEV_GUILD_IDS` empty (global).** Commands are registered once, globally, and appear in
+  every server the bot is in - but Discord can take up to an hour to show them.
+
+You can also register by hand:
+
 ```bash
 npm run commands:register -- --guild   # instant, uses DEV_GUILD_IDS
 npm run commands:register              # global, up to an hour to propagate
 ```
 
-Use guild registration while developing and global registration in production.
+Do not mix the two: a server registered both globally and guild-scoped shows every command
+twice. If you switch from global to guild-scoped, clear the global set first with
+`npm run commands:clear`.
+
+If commands do not appear in a newly joined server, the usual cause is global mode (just
+wait) or a server that joined while `DEV_GUILD_IDS` was empty; setting `DEV_GUILD_IDS` and
+redeploying the bot registers every server it is in.
 
 ## 7. Register the guilds with the platform
 

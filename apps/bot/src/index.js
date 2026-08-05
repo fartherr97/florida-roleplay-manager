@@ -15,7 +15,7 @@ import { closeQueues, closeRedis } from '@frm/queue';
 import { getEnv } from '@frm/shared';
 import { isGuildApproved, reconcileGlobalAdminsSafely } from '@frm/core';
 import { registerEventHandlers } from './events.js';
-import { registerCommands } from './lib/register.js';
+import { registerCommands, registerGuildCommands } from './lib/register.js';
 
 const log = createLogger('bot');
 
@@ -39,15 +39,25 @@ async function main() {
   );
 
   const { gateway, client } = await createGatewayFromEnv({ cacheMembers: true });
-  registerEventHandlers(client, { gateway });
+  registerEventHandlers(client, { gateway, env });
 
   // Register slash commands on boot so a fresh deployment is usable without a separate
   // step: guild-scoped (instant) when DEV_GUILD_IDS is set, global otherwise. Never
   // fatal - a registration hiccup must not take an otherwise-healthy bot offline.
+  //
+  // In guild scope, register for every server the bot is actually in, not just
+  // DEV_GUILD_IDS: a server invited while the bot was offline (so guildCreate never
+  // fired for it) would otherwise have no commands until it was listed by hand.
   try {
-    const registered = await registerCommands({ env });
+    const perGuild = env.DEV_GUILD_IDS.length > 0;
+    const registered = perGuild
+      ? await registerGuildCommands({
+          env,
+          guildIds: [...env.DEV_GUILD_IDS, ...client.guilds.cache.keys()],
+        })
+      : await registerCommands({ env, perGuild });
     log.info(
-      { scope: registered.scope, count: registered.count, guilds: registered.guildIds },
+      { scope: registered.scope, count: registered.count, guilds: registered.guildIds.length },
       'slash commands registered',
     );
   } catch (error) {

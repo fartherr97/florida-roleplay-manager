@@ -19,14 +19,15 @@ import {
   isGuildApproved,
 } from '@frm/core';
 import { handleInteraction } from './interactions.js';
+import { registerGuildCommands } from './lib/register.js';
 
 const log = createLogger('bot.events');
 
 /**
  * @param {import('discord.js').Client} client
- * @param {{gateway: object}} deps
+ * @param {{gateway: object, env: object}} deps
  */
-export function registerEventHandlers(client, { gateway }) {
+export function registerEventHandlers(client, { gateway, env }) {
   client.on(Events.InteractionCreate, (interaction) => {
     handleInteraction(interaction, { gateway }).catch((error) => {
       log.error({ err: serializeError(error) }, 'unhandled interaction error');
@@ -38,23 +39,43 @@ export function registerEventHandlers(client, { gateway }) {
   client.on(Events.GuildCreate, async (guild) => {
     try {
       const approved = await isGuildApproved(guild.id);
+      let staying = approved;
+
       if (approved) {
         log.info({ discordGuildId: guild.id, name: guild.name }, 'joined an approved guild');
-        return;
+      } else {
+        // Not on the allowlist: audit it, alert the administrators, and leave unless
+        // auto-leave is switched off (for onboarding) or development mode is on.
+        const result = await handleUnapprovedGuildJoin({
+          discordGuildId: guild.id,
+          name: guild.name,
+          memberCount: guild.memberCount,
+          gateway,
+        });
+        staying = !result.left;
+        log.warn(
+          { discordGuildId: guild.id, name: guild.name, left: result.left },
+          'joined an unapproved guild',
+        );
       }
 
-      // Not on the allowlist: audit it, alert the administrators, and leave unless a
-      // developer has explicitly enabled development mode.
-      const result = await handleUnapprovedGuildJoin({
-        discordGuildId: guild.id,
-        name: guild.name,
-        memberCount: guild.memberCount,
-        gateway,
-      });
-      log.warn(
-        { discordGuildId: guild.id, name: guild.name, left: result.left },
-        'joined an unapproved guild',
-      );
+      // If the bot is staying, make its commands available in this server immediately.
+      // Guild-scoped registration is instant; without it a freshly onboarded server
+      // (including one kept via auto-leave-off, where `/setup department` must be usable)
+      // would show no commands until global propagation, up to an hour later. Only in
+      // guild scope - registering guild commands while also registered globally would
+      // show every command twice.
+      if (staying && env.DEV_GUILD_IDS.length > 0) {
+        try {
+          await registerGuildCommands({ env, guildIds: [guild.id] });
+          log.info({ discordGuildId: guild.id }, 'registered commands for newly joined guild');
+        } catch (error) {
+          log.error(
+            { err: serializeError(error), discordGuildId: guild.id },
+            'failed to register commands for newly joined guild',
+          );
+        }
+      }
     } catch (error) {
       log.error({ err: serializeError(error), discordGuildId: guild.id }, 'guildCreate failed');
     }
