@@ -30,7 +30,7 @@ describe.skipIf(!available)('department provisioning', () => {
   let adminCtx;
   let prisma;
 
-  const base = { discordGuildId: NEW_DEPT_GUILD, name: 'New Department', tag: 'ND' };
+  const base = { discordGuildId: NEW_DEPT_GUILD, name: 'HCSO', tag: 'HCSO' };
 
   beforeEach(async () => {
     await resetDatabase();
@@ -58,14 +58,16 @@ describe.skipIf(!available)('department provisioning', () => {
   it('creates the roles, categories and channels on an empty server', async () => {
     const result = await provisionDepartment(adminCtx, { ...base, wireIn: false }, { gateway });
 
-    expect(result.created.roles).toHaveLength(3);
-    expect(result.created.categories).toHaveLength(5);
+    expect(result.created.roles.length).toBeGreaterThan(10);
+    expect(result.created.categories.length).toBeGreaterThan(5);
     expect(result.created.channels.length).toBeGreaterThan(10);
 
     const channels = await gateway.listChannels(NEW_DEPT_GUILD);
-    expect(channels.some((c) => c.type === 'category' && c.name === '🔒 Command')).toBe(true);
+    expect(channels.some((c) => c.type === 'category' && c.name === 'HCSO | Command Staff')).toBe(
+      true,
+    );
     // Channels are parented to their category, not left loose.
-    const command = channels.find((c) => c.name === '🔒 Command');
+    const command = channels.find((c) => c.name === 'HCSO | Command Staff');
     expect(channels.some((c) => c.name === 'command-chat' && c.parentId === command.id)).toBe(true);
   });
 
@@ -89,7 +91,7 @@ describe.skipIf(!available)('department provisioning', () => {
     );
 
     expect(preview.dryRun).toBe(true);
-    expect(preview.plan.toCreate.roles).toBe(3);
+    expect(preview.plan.toCreate.roles).toBeGreaterThan(0);
     expect(gateway.calls).toHaveLength(0);
   });
 
@@ -112,7 +114,7 @@ describe.skipIf(!available)('department provisioning', () => {
 
     const managed = await prisma.managedRole.findFirst({ where: { approvedGuildId: guild.id } });
     expect(managed).not.toBeNull();
-    expect(managed.name).toBe('ND Member');
+    expect(managed.name).toBe('HCSO | Department Member');
 
     const mapping = await prisma.roleMapping.findFirst({ where: { targetGuildId: guild.id } });
     expect(mapping).not.toBeNull();
@@ -156,7 +158,13 @@ describe.skipIf(!available)('department provisioning', () => {
     expect(result.warnings.some((w) => /could not create/i.test(w))).toBe(true);
     // The rest of the server was still built.
     expect(result.created.channels.length).toBeGreaterThan(5);
-    expect(result.created.roles).toHaveLength(3);
+    expect(result.created.roles.length).toBeGreaterThan(10);
+  });
+
+  it('rejects an unsupported department tag with a clear message', async () => {
+    await expect(
+      provisionDepartment(adminCtx, { ...base, tag: 'XYZ' }, { gateway }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
   });
 
   it('refuses when the bot cannot manage channels', async () => {

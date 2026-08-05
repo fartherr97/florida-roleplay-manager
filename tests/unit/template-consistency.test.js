@@ -48,7 +48,10 @@ function findProblems(template) {
 
 describe('template consistency', () => {
   it('the department template references only roles it defines', () => {
-    expect(findProblems(buildDepartmentTemplate({ name: 'Test', tag: 'T' }))).toEqual([]);
+    // Every supported agency, since each produces a slightly different role set.
+    for (const tag of ['HCSO', 'TPD', 'FHP']) {
+      expect(findProblems(buildDepartmentTemplate({ name: tag, tag }))).toEqual([]);
+    }
   });
 
   it('the community template references only roles it defines', () => {

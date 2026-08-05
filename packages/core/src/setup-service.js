@@ -16,7 +16,13 @@
  */
 import { getPrisma, notDeleted } from '@frm/database';
 import { createLogger, serializeError } from '@frm/logging';
-import { AuditAction, GuildType, PreconditionError, RolePurpose } from '@frm/shared';
+import {
+  AuditAction,
+  GuildType,
+  PreconditionError,
+  RolePurpose,
+  ValidationError,
+} from '@frm/shared';
 import { authorize } from '@frm/authorization';
 import { parseOrThrow, provisionCommunitySchema, provisionDepartmentSchema } from '@frm/validation';
 import { recordAudit } from './audit-service.js';
@@ -103,7 +109,14 @@ export async function provisionDepartment(ctx, input, { gateway } = {}) {
   const data = parseOrThrow(provisionDepartmentSchema, input);
   authorize(ctx.actor, { capability: 'guild.provision', scope: {} });
 
-  const template = buildDepartmentTemplate({ name: data.name, tag: data.tag, color: data.color });
+  // The department template rejects tags it has no profile for; surface that as a clean
+  // validation message to the administrator rather than a generic failure.
+  let template;
+  try {
+    template = buildDepartmentTemplate({ name: data.name, tag: data.tag, color: data.color });
+  } catch (error) {
+    throw new ValidationError(error.message);
+  }
   const built = await createStructure(ctx, { data, template, gateway, label: 'department' });
   if (built.dryRun) return dryRunResult(built);
 
