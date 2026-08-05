@@ -48,6 +48,8 @@ const CHANNEL_TYPE = {
   text: ChannelType.GuildText,
   voice: ChannelType.GuildVoice,
   announcement: ChannelType.GuildAnnouncement,
+  forum: ChannelType.GuildForum,
+  stage: ChannelType.GuildStageVoice,
 };
 
 /** Maps a discord.js channel-type constant back onto an abstract type. */

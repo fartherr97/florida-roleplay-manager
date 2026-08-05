@@ -107,7 +107,7 @@ export async function provisionDepartment(ctx, input, { gateway } = {}) {
   const built = await createStructure(ctx, { data, template, gateway, label: 'department' });
   if (built.dryRun) return dryRunResult(built);
 
-  const warnings = [];
+  const warnings = built.warnings ?? [];
   const wiredIn = data.wireIn
     ? await wireDepartment(ctx, {
         template,
@@ -140,7 +140,7 @@ export async function provisionCommunity(ctx, input, { gateway } = {}) {
   const built = await createStructure(ctx, { data, template, gateway, label: 'community' });
   if (built.dryRun) return dryRunResult(built);
 
-  const warnings = [];
+  const warnings = built.warnings ?? [];
   const wiredIn = data.wireIn
     ? await wireCommunity(ctx, {
         discordGuildId: data.discordGuildId,
@@ -189,6 +189,7 @@ async function createStructure(ctx, { data, template, gateway, label }) {
     data.reason ??
     `Provisioned via /setup ${label} by ${ctx.actor?.user?.displayName ?? 'an administrator'}`;
   const created = { roles: [], categories: [], channels: [] };
+  const warnings = [];
 
   // 1. Roles first: permission overwrites reference them by id.
   const roleIdByKey = {};
@@ -198,43 +199,67 @@ async function createStructure(ctx, { data, template, gateway, label }) {
       continue;
     }
     const spec = template.roles.find((candidate) => candidate.key === role.key);
-    const madeRole = await gateway.createRole(data.discordGuildId, { ...spec, reason });
-    roleIdByKey[role.key] = madeRole.id;
-    created.roles.push(role.name);
+    try {
+      const madeRole = await gateway.createRole(data.discordGuildId, { ...spec, reason });
+      roleIdByKey[role.key] = madeRole.id;
+      created.roles.push(role.name);
+    } catch (error) {
+      warnings.push(`Could not create the "${role.name}" role: ${message(error)}`);
+    }
   }
 
   // 2. Categories with their overwrites, then 3. the channels inside them, which inherit.
+  // Each creation is best-effort: one unsupported channel (a forum on a non-community
+  // server, say) must not abort a whole server's worth of otherwise-fine structure.
   for (let index = 0; index < plan.categories.length; index += 1) {
     const categoryPlan = plan.categories[index];
     const categorySpec = template.categories[index];
 
     let categoryId = categoryPlan.id;
     if (categoryPlan.action === 'create') {
-      const madeCategory = await gateway.createChannel(data.discordGuildId, {
-        name: categorySpec.name,
-        type: 'category',
-        permissionOverwrites: resolveOverwrites(categorySpec.overwrites, roleIdByKey, guild.id),
-        reason,
-      });
-      categoryId = madeCategory.id;
-      created.categories.push(categorySpec.name);
+      try {
+        const madeCategory = await gateway.createChannel(data.discordGuildId, {
+          name: categorySpec.name,
+          type: 'category',
+          permissionOverwrites: resolveOverwrites(categorySpec.overwrites, roleIdByKey, guild.id),
+          reason,
+        });
+        categoryId = madeCategory.id;
+        created.categories.push(categorySpec.name);
+      } catch (error) {
+        warnings.push(
+          `Could not create the "${categorySpec.name}" category, so its channels were skipped: ${message(error)}`,
+        );
+        continue; // without the category there is nowhere to put its channels
+      }
     }
 
     for (let channelIndex = 0; channelIndex < categoryPlan.channels.length; channelIndex += 1) {
       const channelPlan = categoryPlan.channels[channelIndex];
       if (channelPlan.action === 'exists') continue;
       const channelSpec = categorySpec.channels[channelIndex];
-      await gateway.createChannel(data.discordGuildId, {
-        name: channelSpec.name,
-        type: channelSpec.type,
-        parentId: categoryId,
-        reason,
-      });
-      created.channels.push(channelSpec.name);
+      try {
+        await gateway.createChannel(data.discordGuildId, {
+          name: channelSpec.name,
+          type: channelSpec.type,
+          parentId: categoryId,
+          reason,
+        });
+        created.channels.push(channelSpec.name);
+      } catch (error) {
+        warnings.push(
+          `Could not create the "${channelSpec.name}" ${channelSpec.type} channel: ${message(error)}`,
+        );
+      }
     }
   }
 
-  return { guild, plan, dryRun: false, created, roleIdByKey, reason };
+  return { guild, plan, dryRun: false, created, roleIdByKey, reason, warnings };
+}
+
+/** A short, human-readable reason from a thrown error. */
+function message(error) {
+  return error?.userMessage ?? error?.message ?? 'unknown error';
 }
 
 function dryRunResult(built) {

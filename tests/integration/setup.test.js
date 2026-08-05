@@ -138,6 +138,27 @@ describe.skipIf(!available)('department provisioning', () => {
     ).rejects.toThrow(/guild.provision/i);
   });
 
+  it('keeps going and warns when a single channel cannot be created', async () => {
+    // Simulate one unsupported channel (e.g. a forum on a non-community server): it must
+    // not abort the rest of a large server's worth of structure.
+    const original = gateway.createChannel.bind(gateway);
+    let failed = false;
+    gateway.createChannel = async (guildId, spec) => {
+      if (!failed && spec.type === 'voice') {
+        failed = true;
+        throw Object.assign(new Error('unsupported channel'), { userMessage: 'not allowed here' });
+      }
+      return original(guildId, spec);
+    };
+
+    const result = await provisionDepartment(adminCtx, { ...base, wireIn: false }, { gateway });
+
+    expect(result.warnings.some((w) => /could not create/i.test(w))).toBe(true);
+    // The rest of the server was still built.
+    expect(result.created.channels.length).toBeGreaterThan(5);
+    expect(result.created.roles).toHaveLength(3);
+  });
+
   it('refuses when the bot cannot manage channels', async () => {
     gateway.defineGuild({
       id: NEW_DEPT_GUILD,

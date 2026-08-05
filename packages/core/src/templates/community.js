@@ -88,10 +88,7 @@ const EMERGENCY_SERVICES_ACCESS = [
  * @param {number|string} [params.color] Default role color
  * @returns {import('./department.js').DepartmentTemplate}
  */
-export function buildCommunityTemplate({
-  name = 'Florida Roleplay',
-  color = DEFAULT_COLOR,
-}) {
+export function buildCommunityTemplate({ name = 'Florida Roleplay', color = DEFAULT_COLOR }) {
   return {
     name,
 

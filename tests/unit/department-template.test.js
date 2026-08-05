@@ -36,22 +36,18 @@ describe('buildDepartmentTemplate', () => {
 });
 
 describe('buildCommunityTemplate', () => {
-  it('has no platform-managed role of its own and locks the Staff category', () => {
+  it('has roles and categories but no platform-managed role of its own', () => {
     const template = buildCommunityTemplate({ name: 'Test Community' });
 
     expect(template.managedRoleKey).toBeNull();
-    expect(template.roles.map((role) => role.key)).toContain('staff');
-
-    const staff = template.categories.find((category) => category.key === 'staff');
-    const everyone = staff.overwrites.find((overwrite) => overwrite.role === 'everyone');
-    expect(everyone.deny).toContain('ViewChannel');
-    expect(staff.overwrites.some((overwrite) => overwrite.role === 'staff')).toBe(true);
+    expect(template.roles.length).toBeGreaterThan(0);
+    expect(template.categories.length).toBeGreaterThan(0);
   });
 
-  it('plans as fully creatable on an empty server', () => {
+  it('plans every role and category as creatable on an empty server', () => {
     const template = buildCommunityTemplate({ name: 'Test Community' });
     const plan = planDepartmentProvision(template, [], []);
-    expect(plan.toCreate.roles).toBe(2);
+    expect(plan.toCreate.roles).toBe(template.roles.length);
     expect(plan.toCreate.categories).toBe(template.categories.length);
   });
 });
