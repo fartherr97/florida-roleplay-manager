@@ -7,10 +7,12 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import {
   getGuildStatus,
+  getSetting,
   listGuilds,
   registerGuild,
   removeGuild,
   updateGuildSettings,
+  updateSetting,
 } from '@frm/core';
 import { GuildType } from '@frm/shared';
 import {
@@ -87,6 +89,18 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
+      .setName('autoleave')
+      .setDescription('Toggle whether the bot auto-leaves servers that are not approved')
+      .addBooleanOption((option) =>
+        option
+          .setName('enabled')
+          .setDescription('On: leave unapproved servers. Off: stay (use while onboarding).')
+          .setRequired(true),
+      )
+      .addStringOption(reasonOption(false)),
+  )
+  .addSubcommand((sub) =>
+    sub
       .setName('status')
       .setDescription('Live health of an approved server')
       .addStringOption(guildOption(false)),
@@ -104,6 +118,8 @@ export async function execute(interaction, { ctx, gateway }) {
       return handleRemove(interaction, ctx);
     case 'settings':
       return handleSettings(interaction, ctx);
+    case 'autoleave':
+      return handleAutoLeave(interaction, ctx);
     case 'status':
       return handleStatus(interaction, ctx, gateway);
     default:
@@ -221,6 +237,33 @@ async function handleSettings(interaction, ctx) {
       successEmbed('Settings updated', `**${guild.name}** has been updated.`, [
         { name: 'Enabled', value: guild.enabled ? 'yes' : 'no', inline: true },
         { name: 'Synchronization', value: guild.syncEnabled ? 'on' : 'off', inline: true },
+      ]),
+    ],
+  });
+}
+
+async function handleAutoLeave(interaction, ctx) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const enabled = interaction.options.getBoolean('enabled');
+  const previous = Boolean(await getSetting('guild.autoLeaveUnapproved', true, ctx.prisma));
+
+  await updateSetting(ctx, {
+    key: 'guild.autoLeaveUnapproved',
+    value: enabled,
+    reason: interaction.options.getString('reason') ?? 'Toggled from Discord',
+  });
+
+  const description = enabled
+    ? 'The bot will now **leave** any server it is added to that is not on the approved allowlist.'
+    : 'The bot will now **stay** in servers that are not approved. Invite it, run `/setup ' +
+      'department` (or `/guild register`) to approve the server, then turn auto-leave back on.';
+
+  return interaction.editReply({
+    embeds: [
+      successEmbed('Auto-leave updated', description, [
+        { name: 'Was', value: previous ? 'on' : 'off', inline: true },
+        { name: 'Now', value: enabled ? 'on' : 'off', inline: true },
       ]),
     ],
   });

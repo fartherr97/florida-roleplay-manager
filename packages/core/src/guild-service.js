@@ -22,6 +22,7 @@ import {
 } from '@frm/validation';
 import { recordAudit } from './audit-service.js';
 import { notifyGlobalAdmins } from './notify.js';
+import { getSetting } from './system-service.js';
 import {
   authorizeAnyScope,
   findApprovedGuildBySnowflake,
@@ -337,14 +338,32 @@ export async function getGuildStatus(ctx, { guildId }, { gateway } = {}) {
 }
 
 /**
+ * Decides whether the bot should stay in a guild that is not on the allowlist.
+ *
+ * Development mode always stays (so a developer's test server is never abandoned).
+ * Otherwise the `guild.autoLeaveUnapproved` setting decides: on means leave, off means
+ * stay. Turning it off is the supported way to onboard a new server.
+ *
+ * @param {object} params
+ * @param {boolean} params.devMode
+ * @param {boolean} params.autoLeave
+ */
+export function shouldStayInUnapprovedGuild({ devMode, autoLeave }) {
+  return Boolean(devMode) || !autoLeave;
+}
+
+/**
  * Handles the bot being added to a guild that is not on the allowlist.
  *
  * 1. record an audit entry
  * 2. alert the global administrators
  * 3. refuse to process anything for that guild
- * 4. leave, unless development mode says otherwise
+ * 4. leave automatically, unless auto-leave is switched off
  *
- * Production always leaves: `devMode` is forced off when NODE_ENV is production.
+ * Auto-leave is governed by the `guild.autoLeaveUnapproved` setting (default on). Turning
+ * it off is the supported way to onboard a new server: an administrator disables it,
+ * invites the bot, runs `/setup department` (or `/guild register`) to approve the server,
+ * then turns it back on. Development mode always stays regardless of the setting.
  *
  * @param {object} params
  * @param {string} params.discordGuildId
@@ -355,6 +374,8 @@ export async function getGuildStatus(ctx, { guildId }, { gateway } = {}) {
 export async function handleUnapprovedGuildJoin({ discordGuildId, name, gateway, memberCount }) {
   const env = getEnv();
   const prisma = getPrisma();
+  const autoLeave = Boolean(await getSetting('guild.autoLeaveUnapproved', true, prisma));
+  const shouldStay = shouldStayInUnapprovedGuild({ devMode: env.devMode, autoLeave });
 
   const ctx = {
     actor: { user: { id: null }, discordUserId: null, isSystem: true },
@@ -376,21 +397,26 @@ export async function handleUnapprovedGuildJoin({ discordGuildId, name, gateway,
     title: 'Bot added to an unapproved Discord server',
     description:
       `The bot was added to **${name}** (\`${discordGuildId}\`), which is not on the approved ` +
-      'allowlist. All commands and synchronization are refused there.',
+      'allowlist. All commands and synchronization are refused there until it is approved.',
     severity: 'critical',
     fields: [
       { name: 'Guild ID', value: discordGuildId },
       { name: 'Members', value: String(memberCount ?? 'unknown') },
       {
         name: 'Action',
-        value: env.devMode ? 'Staying (development mode)' : 'Leaving automatically',
+        value: env.devMode
+          ? 'Staying (development mode)'
+          : autoLeave
+            ? 'Leaving automatically'
+            : 'Staying (auto-leave is off - approve it or turn auto-leave back on)',
       },
     ],
   });
 
-  if (env.devMode) {
-    log.warn({ discordGuildId, name }, 'unapproved guild join - staying because DEV_MODE is on');
-    return { left: false, reason: 'development mode' };
+  if (shouldStay) {
+    const reason = env.devMode ? 'development mode' : 'auto-leave disabled';
+    log.warn({ discordGuildId, name, reason }, 'unapproved guild join - staying');
+    return { left: false, reason };
   }
 
   if (gateway) {

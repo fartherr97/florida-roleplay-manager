@@ -102,6 +102,18 @@ Registering from Discord verifies the bot's presence and permissions live. Regis
 through the API (which has no Discord connection) creates the guild with synchronization
 disabled until it is verified.
 
+By default the bot leaves any server it is added to that is not yet approved, which would
+kick it out before you can register a new one. To onboard a server, first pause auto-leave
+from an already-approved server, invite the bot, approve the new server (either
+`/guild register` or the full `/setup department`, which registers as part of the flow),
+then turn auto-leave back on:
+
+```
+/guild autoleave enabled:false reason:onboarding the department servers
+# ...invite the bot to each new server and run /setup department or /guild register...
+/guild autoleave enabled:true
+```
+
 Then confirm everything is healthy:
 
 ```

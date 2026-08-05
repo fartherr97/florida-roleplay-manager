@@ -13,6 +13,8 @@ a member's role list is left strictly alone.
 
 - **Approved guild allowlist.** A Discord server that is not registered cannot use the bot
   for anything. The bot leaves unapproved servers automatically and alerts administrators.
+  Auto-leave can be paused with `/guild autoleave enabled:false` to onboard a new server,
+  then switched back on.
 - **Cross-guild role mappings.** One-way and two-way, with a configurable authority side,
   separate add/removal switches, priorities, and rejection of anything that would create a
   synchronization loop.

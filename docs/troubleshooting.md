@@ -18,6 +18,21 @@ it:
 Check with `/guild list`. A guild that was removed shows as disabled rather than absent;
 re-registering restores the original record along with its managed roles and history.
 
+### The bot joins a new server and immediately leaves
+
+That is auto-leave working as designed: the bot leaves any server that is not on the
+approved allowlist. To onboard a new server, pause it first from an already-approved
+server, then approve the new one, then turn it back on:
+
+```
+/guild autoleave enabled:false reason:onboarding
+# ...invite the bot, then run /setup department or /guild register in the new server...
+/guild autoleave enabled:true
+```
+
+Development mode (`DEV_MODE=true`, never in production) also keeps the bot in unapproved
+servers.
+
 ### "Your Discord account is not linked to a platform account"
 
 The Discord account has no member record. Somebody with `member.link` runs:

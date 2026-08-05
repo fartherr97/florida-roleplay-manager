@@ -86,7 +86,9 @@ const DEFAULT_SETTINGS = [
   {
     key: 'guild.autoLeaveUnapproved',
     value: true,
-    description: 'Leave guilds that are not on the allowlist (forced on in production).',
+    description:
+      'Leave guilds that are not on the allowlist. Turn off with `/guild autoleave` to onboard ' +
+      'a new server, then turn back on.',
   },
   {
     key: 'approval.requiredForProtectedMappings',
