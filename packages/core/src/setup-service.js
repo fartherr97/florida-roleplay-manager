@@ -24,7 +24,12 @@ import {
   ValidationError,
 } from '@frm/shared';
 import { authorize } from '@frm/authorization';
-import { parseOrThrow, provisionCommunitySchema, provisionDepartmentSchema } from '@frm/validation';
+import {
+  parseOrThrow,
+  provisionCommunitySchema,
+  provisionDepartmentSchema,
+  resetPermissionsSchema,
+} from '@frm/validation';
 import { recordAudit } from './audit-service.js';
 import { registerGuild } from './guild-service.js';
 import { upsertManagedRole } from './managed-role-service.js';
@@ -275,6 +280,126 @@ async function createStructure(ctx, { data, template, gateway, label }) {
   }
 
   return { guild, plan, dryRun: false, created, roleIdByKey, reason, warnings };
+}
+
+/**
+ * What every member gets through @everyone once role permissions are stripped: enough to
+ * take part in any channel they can see, with visibility and anything sensitive left to the
+ * per-channel overwrites. Deliberately excludes moderation and management permissions.
+ */
+export const EVERYONE_BASELINE = Object.freeze([
+  'ViewChannel',
+  'ReadMessageHistory',
+  'SendMessages',
+  'SendMessagesInThreads',
+  'CreatePublicThreads',
+  'AddReactions',
+  'EmbedLinks',
+  'AttachFiles',
+  'UseExternalEmojis',
+  'UseExternalStickers',
+  'Connect',
+  'Speak',
+  'Stream',
+  'UseVAD',
+  'ChangeNickname',
+  'UseApplicationCommands',
+]);
+
+/**
+ * Blanks every role the bot can manage and gives @everyone the baseline, so that access is
+ * decided entirely by channel overwrites rather than by permissions carried on roles.
+ *
+ * Only roles below the bot and not managed by an integration are touched; @everyone is set
+ * to the baseline; the server owner and the bot itself are unaffected. Each edit is
+ * best-effort - one role that cannot be edited becomes a warning, not a failure.
+ *
+ * @param {import('./context.js').ServiceContext} ctx
+ * @param {object} input
+ * @param {{gateway?: object}} [options]
+ */
+export async function resetGuildPermissions(ctx, input, { gateway } = {}) {
+  const data = parseOrThrow(resetPermissionsSchema, input);
+  authorize(ctx.actor, { capability: 'guild.provision', scope: {} });
+
+  if (!gateway) {
+    throw new PreconditionError('Resetting permissions needs a live Discord connection.');
+  }
+  const guild = await gateway.getGuild(data.discordGuildId);
+  if (!guild || !guild.botPresent) {
+    throw new PreconditionError('The bot is not in that Discord server.');
+  }
+  if (!guild.botCanManageRoles) {
+    throw new PreconditionError('The bot needs Manage Roles in that server to reset permissions.');
+  }
+
+  const roles = await gateway.listRoles(data.discordGuildId);
+  const manageable = (role) =>
+    !role.isEveryone && !role.managed && role.position < guild.botHighestRolePosition;
+  const clearable = roles.filter(manageable);
+  const skipped = roles.filter((role) => !role.isEveryone && !manageable(role));
+
+  const plan = {
+    everyoneBaseline: EVERYONE_BASELINE.length,
+    toClear: clearable.length,
+    skipped: skipped.length,
+  };
+
+  if (data.dryRun) {
+    return {
+      dryRun: true,
+      guild: { discordGuildId: guild.id, name: guild.name },
+      plan,
+      clearable: clearable.map((role) => role.name),
+      skipped: skipped.map((role) => role.name),
+    };
+  }
+
+  const reason =
+    data.reason ??
+    `Permissions reset via /setup permissions by ${ctx.actor?.user?.displayName ?? 'an administrator'}`;
+  const warnings = [];
+  let cleared = 0;
+
+  // @everyone gets the baseline first, so the moment roles are blanked members can still
+  // see and use the public channels.
+  try {
+    await gateway.editRolePermissions(data.discordGuildId, guild.id, {
+      permissions: [...EVERYONE_BASELINE],
+      reason,
+    });
+  } catch (error) {
+    warnings.push(`Could not set the @everyone baseline: ${message(error)}`);
+  }
+
+  for (const role of clearable) {
+    try {
+      await gateway.editRolePermissions(data.discordGuildId, role.id, { permissions: [], reason });
+      cleared += 1;
+    } catch (error) {
+      warnings.push(`Could not clear the "${role.name}" role: ${message(error)}`);
+    }
+  }
+
+  await recordAudit(ctx.prisma ?? getPrisma(), {
+    ctx,
+    action: AuditAction.GUILD_PERMISSIONS_RESET,
+    reason,
+    newState: { discordGuildId: data.discordGuildId, cleared, skipped: skipped.length },
+  });
+  log.info(
+    { discordGuildId: data.discordGuildId, cleared, skipped: skipped.length },
+    'permissions reset',
+  );
+
+  return {
+    dryRun: false,
+    guild: { discordGuildId: guild.id, name: guild.name },
+    plan,
+    cleared,
+    skipped: skipped.map((role) => role.name),
+    warnings,
+  };
 }
 
 /** A short, human-readable reason from a thrown error. */

@@ -170,6 +170,19 @@ export class MockRoleGateway {
     return { id, name: spec.name };
   }
 
+  async editRolePermissions(discordGuildId, discordRoleId, spec = {}) {
+    const permissions = spec.permissions ?? [];
+    this.calls.push({
+      action: 'EDIT_ROLE_PERMISSIONS',
+      discordGuildId,
+      roleId: discordRoleId,
+      permissions,
+    });
+    const role = this.roles.get(discordGuildId)?.get(discordRoleId);
+    if (role) role.permissions = permissions;
+    return { id: discordRoleId, name: role?.name ?? discordRoleId };
+  }
+
   async createChannel(discordGuildId, spec) {
     this.calls.push({
       action: 'CREATE_CHANNEL',

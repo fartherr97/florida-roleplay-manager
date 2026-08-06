@@ -88,6 +88,12 @@ export const provisionCommunitySchema = z.object({
   reason: optionalReason,
 });
 
+export const resetPermissionsSchema = z.object({
+  discordGuildId: snowflake,
+  dryRun: booleanFlag.default(false),
+  reason: optionalReason,
+});
+
 export const listGuildsSchema = paginationWithSort(
   ['registeredAt', 'name', 'type'],
   'registeredAt',

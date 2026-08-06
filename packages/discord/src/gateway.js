@@ -281,6 +281,33 @@ export class DiscordJsRoleGateway {
   }
 
   /**
+   * Sets a role's permissions. Passing an empty (or omitted) permission list clears every
+   * permission - which is how `/setup permissions` blanks the provisioned roles. The
+   * @everyone role is edited the same way, by passing the guild id as the role id.
+   *
+   * @param {string} discordGuildId
+   * @param {string} discordRoleId
+   * @param {{permissions?: string[], reason?: string}} spec
+   * @returns {Promise<{id: string, name: string}>}
+   */
+  async editRolePermissions(discordGuildId, discordRoleId, spec = {}) {
+    try {
+      const guild = await this.#requireGuild(discordGuildId);
+      const role = await guild.roles.edit(discordRoleId, {
+        permissions: resolvePermissionFlags(spec.permissions ?? []),
+        reason: truncateReason(spec.reason),
+      });
+      return { id: role.id, name: role.name };
+    } catch (error) {
+      log.warn(
+        { discordGuildId, discordRoleId, err: serializeError(error) },
+        'edit role permissions failed',
+      );
+      throw mapDiscordError(error, { discordGuildId });
+    }
+  }
+
+  /**
    * Creates a category or channel.
    *
    * @param {string} discordGuildId
@@ -402,6 +429,11 @@ export class ReadOnlyGatewayDecorator {
   async createRole(discordGuildId, spec) {
     log.info({ discordGuildId, name: spec?.name }, 'mock: would create role');
     return { id: `mock-role-${spec?.name}`, name: spec?.name, mocked: true };
+  }
+
+  async editRolePermissions(discordGuildId, discordRoleId) {
+    log.info({ discordGuildId, discordRoleId }, 'mock: would edit role permissions');
+    return { id: discordRoleId, name: discordRoleId, mocked: true };
   }
 
   async createChannel(discordGuildId, spec) {

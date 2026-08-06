@@ -136,7 +136,10 @@ channels, roles and permission overwrites from an editable template
 [`community.js`](packages/core/src/templates/community.js)). `community` registers the server
 as your `MAIN_COMMUNITY` hub; `department` registers the server, marks its member role as
 managed, and maps the main community into it. Both are idempotent: re-running only creates
-what is missing, so they double as repair commands.
+what is missing, so they double as repair commands. Provisioned roles carry **no**
+permissions of their own — access is decided entirely by the per-channel overwrites — and
+`/setup permissions` blanks every existing role and gives `@everyone` the basics, so an
+already-built server can be moved onto that model in one command.
 
 Anything destructive or large asks for confirmation first, and guild/global resyncs show a
 real preview — computed by the same planner that will do the work — before anything is

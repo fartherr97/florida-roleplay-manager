@@ -6,7 +6,12 @@
  * the server, declares its member role as managed, and maps the main community into it.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { discordContext, provisionCommunity, provisionDepartment } from '@frm/core';
+import {
+  discordContext,
+  provisionCommunity,
+  provisionDepartment,
+  resetGuildPermissions,
+} from '@frm/core';
 import { loadActorByDiscordId } from '@frm/authorization';
 import { closeQueues, closeRedis } from '@frm/queue';
 import { disconnectPrisma } from '@frm/database';
@@ -243,5 +248,87 @@ describe.skipIf(!available)('department provisioning', () => {
       expect(second.created.channels).toEqual([]);
       expect(gateway.calls.length).toBe(callsBefore);
     });
+  });
+});
+
+describe.skipIf(!available)('permissions reset', () => {
+  let gateway;
+  let adminCtx;
+  // The HCSO fixture guild has a realistic mix: manageable roles, one above the bot, and one
+  // integration-managed role.
+  const guildId = IDS.HCSO_GUILD;
+
+  beforeEach(async () => {
+    await resetDatabase();
+    await seedCommunity();
+    gateway = buildMockGateway();
+    adminCtx = discordContext(await loadActorByDiscordId(IDS.D_ADMIN), {
+      discordGuildId: guildId,
+    });
+  });
+
+  afterAll(async () => {
+    await closeQueues().catch(() => {});
+    await closeRedis().catch(() => {});
+    await disconnectPrisma().catch(() => {});
+    await disconnectTestPrisma();
+  });
+
+  const editCalls = () => gateway.calls.filter((call) => call.action === 'EDIT_ROLE_PERMISSIONS');
+
+  it('previews the reset without touching anything', async () => {
+    const preview = await resetGuildPermissions(
+      adminCtx,
+      { discordGuildId: guildId, dryRun: true },
+      { gateway },
+    );
+
+    expect(preview.dryRun).toBe(true);
+    expect(preview.plan.toClear).toBe(5);
+    expect(preview.plan.skipped).toBe(2);
+    expect(preview.plan.everyoneBaseline).toBeGreaterThan(0);
+    expect(editCalls()).toHaveLength(0);
+  });
+
+  it('gives @everyone the baseline and blanks every manageable role', async () => {
+    const result = await resetGuildPermissions(adminCtx, { discordGuildId: guildId }, { gateway });
+
+    expect(result.cleared).toBe(5);
+    expect(result.skipped).toHaveLength(2);
+
+    const edits = editCalls();
+    expect(edits).toHaveLength(6); // @everyone plus the five manageable roles
+
+    const everyone = edits.find((call) => call.roleId === guildId);
+    expect(everyone.permissions.length).toBeGreaterThan(0);
+
+    for (const edit of edits.filter((call) => call.roleId !== guildId)) {
+      expect(edit.permissions).toEqual([]); // every other role is cleared to nothing
+    }
+
+    const touched = new Set(edits.map((call) => call.roleId));
+    expect(touched.has(IDS.R_ABOVE_BOT)).toBe(false);
+    expect(touched.has(IDS.R_INTEGRATION)).toBe(false);
+  });
+
+  it('refuses a caller without guild.provision', async () => {
+    const guildAdminCtx = discordContext(await loadActorByDiscordId(IDS.D_GUILD_ADMIN), {
+      discordGuildId: guildId,
+    });
+    await expect(
+      resetGuildPermissions(guildAdminCtx, { discordGuildId: guildId }, { gateway }),
+    ).rejects.toThrow(/guild\.provision/i);
+  });
+
+  it('refuses when the bot cannot manage roles', async () => {
+    gateway.defineGuild({
+      id: guildId,
+      name: 'HCSO',
+      botCanManageRoles: false,
+      botHighestRolePosition: 100,
+    });
+    await expect(
+      resetGuildPermissions(adminCtx, { discordGuildId: guildId }, { gateway }),
+    ).rejects.toThrow(/Manage Roles/i);
   });
 });

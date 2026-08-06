@@ -33,6 +33,22 @@ server, then approve the new one, then turn it back on:
 Development mode (`DEV_MODE=true`, never in production) also keeps the bot in unapproved
 servers.
 
+### Setup left some channels missing, or roles have permissions I did not want
+
+Two things, both fixed and both repairable by re-running:
+
+- **Missing channels.** `/setup` is idempotent — run it again and it recreates only what is
+  missing. (A large server has hundreds of channels; a first run that was interrupted, for
+  example by a redeploy, leaves gaps that the re-run fills.)
+- **Roles with permissions.** Roles created now carry no permissions of their own, but roles
+  created before, or by hand, may. Run `/setup permissions` in that server: it gives
+  `@everyone` the basics (view, send, react, connect, speak, use commands) and clears every
+  permission from every role the bot can manage, so access comes only from channel
+  overwrites. It previews and asks to confirm first. The server owner and the bot are
+  unaffected, and roles above the bot or managed by an integration are left alone — so make
+  sure you still have a way in (you own the server, or you hold an `/access` tier role) before
+  confirming.
+
 ### "Your Discord account is not linked to a platform account"
 
 The Discord account has no member record. Somebody with `member.link` runs:

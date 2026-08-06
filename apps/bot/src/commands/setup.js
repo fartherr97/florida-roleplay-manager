@@ -15,9 +15,9 @@ import {
   TextInputStyle,
 } from 'discord.js';
 import { randomUUID } from 'node:crypto';
-import { provisionCommunity, provisionDepartment } from '@frm/core';
+import { provisionCommunity, provisionDepartment, resetGuildPermissions } from '@frm/core';
 import { newRequestId } from '@frm/shared';
-import { buildEmbed, renderError, requestConfirmation, truncate } from '../lib/ui.js';
+import { buildEmbed, renderError, requestConfirmation, successEmbed, truncate } from '../lib/ui.js';
 
 export const data = new SlashCommandBuilder()
   .setName('setup')
@@ -43,6 +43,13 @@ export const data = new SlashCommandBuilder()
           .setDescription('Also register the server as the community hub (default: yes)')
           .setRequired(false),
       ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('permissions')
+      .setDescription(
+        'Blank every role and give @everyone the basics, so access comes from channels',
+      ),
   );
 
 export async function execute(interaction, { ctx, gateway }) {
@@ -51,6 +58,8 @@ export async function execute(interaction, { ctx, gateway }) {
       return runSetup(interaction, ctx, gateway, DEPARTMENT);
     case 'community':
       return runSetup(interaction, ctx, gateway, COMMUNITY);
+    case 'permissions':
+      return runPermissionsReset(interaction, ctx, gateway);
     default:
       throw new Error('Unknown subcommand');
   }
@@ -179,6 +188,70 @@ async function runSetup(interaction, ctx, gateway, config) {
     return submission.editReply({ embeds: [resultEmbed(result, wireIn)], components: [] });
   } catch (error) {
     return submission
+      .editReply({ embeds: [renderError(error, requestId)], components: [] })
+      .catch(() => {});
+  }
+}
+
+async function runPermissionsReset(interaction, ctx, gateway) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const requestId = newRequestId();
+
+  try {
+    const preview = await resetGuildPermissions(
+      ctx,
+      { discordGuildId: interaction.guildId, dryRun: true },
+      { gateway },
+    );
+
+    const confirmed = await requestConfirmation(interaction, {
+      title: `Reset permissions in ${preview.guild.name}?`,
+      description:
+        `This will:\n` +
+        `• give **@everyone** the basics — view channels, send messages, react, connect, ` +
+        `speak, use commands, and so on\n` +
+        `• **clear every permission** from **${preview.plan.toClear}** role(s) the bot can manage\n\n` +
+        (preview.plan.skipped > 0
+          ? `**${preview.plan.skipped}** role(s) above the bot or managed by an integration are left ` +
+            `untouched.\n\n`
+          : '') +
+        `After this, access comes entirely from each channel's permissions. The server owner and ` +
+        `the bot are unaffected — but any admin access that came from a role below the bot will be ` +
+        `removed, so make sure you can still get in (owner, or an access tier).`,
+      confirmLabel: 'Reset permissions',
+      danger: true,
+    });
+    if (!confirmed) return undefined;
+
+    const result = await resetGuildPermissions(
+      ctx,
+      { discordGuildId: interaction.guildId, dryRun: false },
+      { gateway },
+    );
+
+    const fields = [
+      { name: 'Roles cleared', value: String(result.cleared), inline: true },
+      { name: 'Left untouched', value: String(result.skipped.length), inline: true },
+    ];
+    if (result.warnings.length) {
+      fields.push({
+        name: `Warnings (${result.warnings.length})`,
+        value: truncate(result.warnings.map((warning) => `• ${warning}`).join('\n')),
+      });
+    }
+
+    return interaction.editReply({
+      embeds: [
+        successEmbed(
+          'Permissions reset',
+          'Roles are blank and @everyone has the basics. Access now comes from channel permissions.',
+          fields,
+        ),
+      ],
+      components: [],
+    });
+  } catch (error) {
+    return interaction
       .editReply({ embeds: [renderError(error, requestId)], components: [] })
       .catch(() => {});
   }
