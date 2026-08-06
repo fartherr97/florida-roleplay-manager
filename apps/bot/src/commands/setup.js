@@ -15,9 +15,12 @@ import {
   TextInputStyle,
 } from 'discord.js';
 import { randomUUID } from 'node:crypto';
+import { createLogger, serializeError } from '@frm/logging';
 import { provisionCommunity, provisionDepartment, resetGuildPermissions } from '@frm/core';
 import { newRequestId } from '@frm/shared';
 import { buildEmbed, renderError, requestConfirmation, successEmbed, truncate } from '../lib/ui.js';
+
+const log = createLogger('bot.setup');
 
 export const data = new SlashCommandBuilder()
   .setName('setup')
@@ -187,6 +190,10 @@ async function runSetup(interaction, ctx, gateway, config) {
     const result = await config.provision(ctx, { ...input, dryRun: false }, { gateway });
     return submission.editReply({ embeds: [resultEmbed(result, wireIn)], components: [] });
   } catch (error) {
+    log.error(
+      { err: serializeError(error), requestId, label: config.label },
+      'setup provisioning failed',
+    );
     return submission
       .editReply({ embeds: [renderError(error, requestId)], components: [] })
       .catch(() => {});
@@ -251,6 +258,10 @@ async function runPermissionsReset(interaction, ctx, gateway) {
       components: [],
     });
   } catch (error) {
+    log.error(
+      { err: serializeError(error), requestId, discordGuildId: interaction.guildId },
+      'setup permissions failed',
+    );
     return interaction
       .editReply({ embeds: [renderError(error, requestId)], components: [] })
       .catch(() => {});

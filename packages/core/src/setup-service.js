@@ -381,12 +381,22 @@ export async function resetGuildPermissions(ctx, input, { gateway } = {}) {
     }
   }
 
-  await recordAudit(ctx.prisma ?? getPrisma(), {
-    ctx,
-    action: AuditAction.GUILD_PERMISSIONS_RESET,
-    reason,
-    newState: { discordGuildId: data.discordGuildId, cleared, skipped: skipped.length },
-  });
+  // The work on Discord is already done by here; a failure to write the audit row must not
+  // turn a successful reset into a reported failure.
+  try {
+    await recordAudit(ctx.prisma ?? getPrisma(), {
+      ctx,
+      action: AuditAction.GUILD_PERMISSIONS_RESET,
+      reason,
+      newState: { discordGuildId: data.discordGuildId, cleared, skipped: skipped.length },
+    });
+  } catch (error) {
+    warnings.push('The reset was applied but could not be written to the audit log.');
+    log.error(
+      { discordGuildId: data.discordGuildId, err: serializeError(error) },
+      'permissions reset audit failed',
+    );
+  }
   log.info(
     { discordGuildId: data.discordGuildId, cleared, skipped: skipped.length },
     'permissions reset',
