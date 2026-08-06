@@ -83,6 +83,25 @@ describe.skipIf(!available)('department provisioning', () => {
     expect(gateway.calls.length).toBe(callsBefore); // nothing new was created
   });
 
+  it('repairs a partial run: a re-run recreates a channel that went missing', async () => {
+    await provisionDepartment(adminCtx, { ...base, wireIn: false }, { gateway });
+
+    // Simulate a first run that did not finish: one channel never got created. Its name is
+    // shared by channels in other categories, which used to make the planner skip it.
+    const channels = await gateway.listChannels(NEW_DEPT_GUILD);
+    const command = channels.find((c) => c.name === 'HCSO | Command Staff');
+    const commandChat = channels.find(
+      (c) => c.name === 'command-chat' && c.parentId === command.id,
+    );
+    gateway.deleteChannel(NEW_DEPT_GUILD, commandChat.id);
+
+    const repair = await provisionDepartment(adminCtx, { ...base, wireIn: false }, { gateway });
+
+    expect(repair.created.channels).toContain('command-chat');
+    const after = await gateway.listChannels(NEW_DEPT_GUILD);
+    expect(after.some((c) => c.name === 'command-chat' && c.parentId === command.id)).toBe(true);
+  });
+
   it('previews without creating anything on a dry run', async () => {
     const preview = await provisionDepartment(
       adminCtx,

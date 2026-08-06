@@ -65,12 +65,19 @@ export function planProvision(template, existingRoles, existingChannels) {
     );
 
     const channels = category.channels.map((channel) => {
-      const existing = existingChannels.find(
-        (candidate) =>
-          candidate.type === channel.type &&
-          sameName(candidate.name, channel.name) &&
-          (existingCategory ? candidate.parentId === existingCategory.id : true),
-      );
+      // A channel only counts as already present if it lives *under this category*. Without
+      // the category there is nothing to match against - matching a same-named channel in
+      // another category (many share names like "general" or "info") would wrongly mark it
+      // "exists" and skip it, which is how a re-run could report "nothing to create" while
+      // half the channels were still missing.
+      const existing =
+        existingCategory != null &&
+        existingChannels.find(
+          (candidate) =>
+            candidate.type === channel.type &&
+            sameName(candidate.name, channel.name) &&
+            candidate.parentId === existingCategory.id,
+        );
       return { name: channel.name, type: channel.type, action: existing ? 'exists' : 'create' };
     });
 

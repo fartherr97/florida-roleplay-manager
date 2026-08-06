@@ -263,7 +263,11 @@ export class DiscordJsRoleGateway {
         color: spec.color ?? undefined,
         hoist: spec.hoist ?? false,
         mentionable: spec.mentionable ?? false,
-        permissions: spec.permissions ? resolvePermissionFlags(spec.permissions) : undefined,
+        // Zero permissions unless a spec explicitly asks for some. Discord otherwise copies
+        // the @everyone permissions onto a new role, which is not what we want: access is
+        // meant to come entirely from per-channel overwrites, and a blank role also always
+        // creates (a role carrying a permission the bot lacks would be rejected).
+        permissions: spec.permissions ? resolvePermissionFlags(spec.permissions) : 0n,
         reason: truncateReason(spec.reason),
       });
       return { id: role.id, name: role.name };

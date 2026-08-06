@@ -107,4 +107,23 @@ describe('planDepartmentProvision', () => {
       'create',
     );
   });
+
+  it('does not treat a same-named channel in another category as already present', () => {
+    // A channel named "announcements" exists, but under an unrelated category, and the
+    // template's own Information category does not exist yet. The channel must still be
+    // planned as create - matching it to the unrelated one is the bug that made a re-run
+    // report "nothing to create" while channels were actually missing.
+    const existingChannels = [
+      { id: 'other-cat', name: 'Some Other Category', type: 'category', parentId: null },
+      { id: 'ch-elsewhere', name: 'announcements', type: 'text', parentId: 'other-cat' },
+    ];
+
+    const plan = planDepartmentProvision(template, [], existingChannels);
+    const information = plan.categories.find((category) => category.key === 'information');
+
+    expect(information.action).toBe('create');
+    expect(information.channels.find((channel) => channel.name === 'announcements').action).toBe(
+      'create',
+    );
+  });
 });

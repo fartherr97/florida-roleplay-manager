@@ -87,6 +87,12 @@ export class MockRoleGateway {
     return this;
   }
 
+  /** Removes a channel, e.g. to simulate one that a first provisioning run never created. */
+  deleteChannel(guildId, channelId) {
+    this.channels.get(guildId)?.delete(channelId);
+    return this;
+  }
+
   /** Makes the next write for this triple fail with the given Discord error code. */
   failNext(guildId, userId, roleId, code) {
     const key = `${guildId}:${userId}:${roleId}`;
