@@ -7,7 +7,12 @@
  * is proven without a database.
  */
 import { describe, expect, it } from 'vitest';
-import { augmentActorWithTier, resolveTierLevel, synthesizeAccessAssignments } from '@frm/core';
+import {
+  augmentActorWithTier,
+  resolveDiscordActor,
+  resolveTierLevel,
+  synthesizeAccessAssignments,
+} from '@frm/core';
 import { evaluate } from '@frm/authorization';
 
 const RULES = [
@@ -76,6 +81,40 @@ describe('augmentActorWithTier', () => {
   it('never lowers an existing higher authority level', () => {
     const actor = { ...baseActor(), user: { ...baseActor().user, permissionLevel: 100 } };
     expect(augmentActorWithTier(actor, 40).user.permissionLevel).toBe(100);
+  });
+});
+
+describe('resolveDiscordActor resilience', () => {
+  // The tier lookup runs in the command guard for every command. If it cannot read the
+  // access-tier table - most importantly before the migration is applied in production - it
+  // must degrade to "no tier", never take the whole bot down with an unexpected failure.
+  it('degrades to the base actor when the access-tier table cannot be read', async () => {
+    const user = {
+      id: '11111111-1111-1111-1111-111111111111',
+      displayName: 'Admin',
+      status: 'ACTIVE',
+      permissionLevel: 40,
+      websiteAccess: false,
+      primaryDiscordId: 'd1',
+      discordIdentities: [{ discordUserId: 'd1' }],
+    };
+    const prisma = {
+      approvedGuild: {
+        findFirst: async () => ({ id: 'g', discordGuildId: '910000000000000001' }),
+      },
+      roleAccessTier: {
+        findMany: async () => {
+          throw new Error('relation "role_access_tiers" does not exist');
+        },
+      },
+      user: { findFirst: async () => user },
+      permissionAssignment: { findMany: async () => [] },
+    };
+    const gateway = { getMember: async () => ({ id: 'd1', roleIds: [] }) };
+
+    const actor = await resolveDiscordActor({ discordUserId: 'd1', gateway, prisma });
+    expect(actor).not.toBeNull();
+    expect(actor.user.permissionLevel).toBe(40); // base level; tier resolution failed gracefully
   });
 });
 

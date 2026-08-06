@@ -15,7 +15,7 @@
  *     to widen who gets access.
  */
 import { getPrisma, notDeleted } from '@frm/database';
-import { createLogger } from '@frm/logging';
+import { createLogger, serializeError } from '@frm/logging';
 import {
   ActionSource,
   AuditAction,
@@ -106,22 +106,39 @@ export function augmentActorWithTier(actor, level) {
 // Live resolution - the entry point the bot guard calls.
 // ---------------------------------------------------------------------------
 
-/** The member's tier from their live main-guild roles, or 0 if there is nothing to apply. */
+/**
+ * The member's tier from their live main-guild roles, or 0 if there is nothing to apply.
+ *
+ * Access tiers are additive and optional, and this runs inside the command guard for *every*
+ * command - so it must never be the thing that fails one. Any error (most importantly the
+ * `role_access_tiers` table not existing yet, before the migration is applied) degrades to
+ * "no tier" rather than propagating and breaking the whole bot.
+ */
 async function resolveTierLevelForMember({ discordUserId, gateway, prisma }) {
-  const mainGuild = await prisma.approvedGuild.findFirst({
-    where: { type: GuildType.MAIN_COMMUNITY, enabled: true, ...notDeleted },
-  });
-  if (!mainGuild) return 0;
+  try {
+    const mainGuild = await prisma.approvedGuild.findFirst({
+      where: { type: GuildType.MAIN_COMMUNITY, enabled: true, ...notDeleted },
+    });
+    if (!mainGuild) return 0;
 
-  const rules = await prisma.roleAccessTier.findMany({
-    where: notDeleted,
-    select: { discordRoleId: true, permissionLevel: true },
-  });
-  if (rules.length === 0 || !gateway) return 0;
+    const rules = await prisma.roleAccessTier.findMany({
+      where: notDeleted,
+      select: { discordRoleId: true, permissionLevel: true },
+    });
+    if (rules.length === 0 || !gateway) return 0;
 
-  const member = await gateway.getMember(mainGuild.discordGuildId, discordUserId).catch(() => null);
-  if (!member) return 0;
-  return resolveTierLevel(rules, member.roleIds);
+    const member = await gateway
+      .getMember(mainGuild.discordGuildId, discordUserId)
+      .catch(() => null);
+    if (!member) return 0;
+    return resolveTierLevel(rules, member.roleIds);
+  } catch (error) {
+    log.error(
+      { err: serializeError(error), discordUserId },
+      'could not resolve access tier; treating as none',
+    );
+    return 0;
+  }
 }
 
 /** Creates a lightweight account for a role-holder who has never linked one. */

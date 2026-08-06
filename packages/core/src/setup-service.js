@@ -438,21 +438,30 @@ function finalResult(built, wiredIn, warnings) {
 }
 
 async function auditProvision(ctx, { data, created, wiredIn, reason }) {
-  await recordAudit(ctx.prisma ?? getPrisma(), {
-    ctx,
-    action: AuditAction.GUILD_PROVISIONED,
-    reason,
-    newState: {
-      discordGuildId: data.discordGuildId,
-      name: data.name,
-      created: {
-        roles: created.roles.length,
-        categories: created.categories.length,
-        channels: created.channels.length,
+  // The server is already provisioned by the time this runs; a failure to write the audit
+  // row must not turn a successful setup into a reported failure.
+  try {
+    await recordAudit(ctx.prisma ?? getPrisma(), {
+      ctx,
+      action: AuditAction.GUILD_PROVISIONED,
+      reason,
+      newState: {
+        discordGuildId: data.discordGuildId,
+        name: data.name,
+        created: {
+          roles: created.roles.length,
+          categories: created.categories.length,
+          channels: created.channels.length,
+        },
+        wiredIn: Boolean(wiredIn),
       },
-      wiredIn: Boolean(wiredIn),
-    },
-  });
+    });
+  } catch (error) {
+    log.error(
+      { discordGuildId: data.discordGuildId, err: serializeError(error) },
+      'provisioning audit failed',
+    );
+  }
 
   log.info(
     { discordGuildId: data.discordGuildId, created, wiredIn: Boolean(wiredIn) },
