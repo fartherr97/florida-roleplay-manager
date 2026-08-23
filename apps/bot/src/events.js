@@ -125,6 +125,8 @@ export function registerEventHandlers(client, { gateway, env }) {
         addedRoleIds,
         removedRoleIds,
         executorDiscordId,
+        // Needed to re-read live roles when an access-tier role changed hands.
+        gateway,
       });
 
       log.debug(

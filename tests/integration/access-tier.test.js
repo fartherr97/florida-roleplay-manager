@@ -10,6 +10,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   discordContext,
   listAccessTiers,
+  reconcileWebsiteAccess,
   removeAccessTier,
   resolveDiscordActor,
   setAccessTier,
@@ -36,10 +37,11 @@ describe.skipIf(!available)('discord-role access tiers', () => {
   let gateway;
   let prisma;
   let adminCtx;
+  let fixturesUsers;
 
   beforeEach(async () => {
     await resetDatabase();
-    await seedCommunity();
+    fixturesUsers = (await seedCommunity()).users;
     prisma = testPrisma();
     gateway = buildMockGateway();
 
@@ -163,6 +165,67 @@ describe.skipIf(!available)('discord-role access tiers', () => {
       await expect(
         resolveDiscordActor({ discordUserId: IDS.D_UNLINKED, gateway, prisma }),
       ).rejects.toThrow();
+    });
+
+    it('grants website access to somebody who holds a mapped role', async () => {
+      // A plain account: no website access, and none ever granted by hand.
+      await prisma.user.update({
+        where: { id: fixturesUsers.member.id },
+        data: { websiteAccess: false, accessFromTier: false },
+      });
+
+      await setAccessTier(adminCtx, {
+        discordRoleId: STAFF_ROLE,
+        roleName: 'Staff',
+        level: 80,
+        reason: 'test',
+      });
+
+      const before = await prisma.user.findFirst({ where: { primaryDiscordId: IDS.D_MEMBER } });
+      expect(before.websiteAccess).toBe(false);
+
+      await resolveDiscordActor({ discordUserId: IDS.D_MEMBER, gateway });
+
+      // The dashboard runs off the same staff roles as the bot, so holding one is the
+      // grant. Without this nobody but the bootstrap admin could sign in at all.
+      const after = await prisma.user.findFirst({ where: { primaryDiscordId: IDS.D_MEMBER } });
+      expect(after.websiteAccess).toBe(true);
+      expect(after.accessFromTier).toBe(true);
+    });
+
+    it('takes website access back when the role goes away', async () => {
+      await prisma.user.update({
+        where: { id: fixturesUsers.member.id },
+        data: { websiteAccess: false, accessFromTier: false },
+      });
+
+      await setAccessTier(adminCtx, {
+        discordRoleId: STAFF_ROLE,
+        roleName: 'Staff',
+        level: 80,
+        reason: 'test',
+      });
+      await resolveDiscordActor({ discordUserId: IDS.D_MEMBER, gateway });
+
+      gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_MEMBER, roleIds: [] });
+      await reconcileWebsiteAccess({ gateway, prisma });
+
+      const after = await prisma.user.findFirst({ where: { primaryDiscordId: IDS.D_MEMBER } });
+      expect(after.websiteAccess).toBe(false);
+    });
+
+    it('never revokes access that was granted explicitly rather than by a tier', async () => {
+      // Somebody an administrator gave website access to by hand, who holds no staff role.
+      await prisma.user.update({
+        where: { id: fixturesUsers.other.id },
+        data: { websiteAccess: true, accessFromTier: false },
+      });
+
+      await reconcileWebsiteAccess({ gateway, prisma });
+
+      // A tier sweep is not the place to overrule a deliberate decision.
+      const after = await prisma.user.findUnique({ where: { id: fixturesUsers.other.id } });
+      expect(after.websiteAccess).toBe(true);
     });
 
     it('loses the tier when the mapping is removed', async () => {

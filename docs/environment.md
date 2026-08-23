@@ -59,6 +59,12 @@ An empty value means "not configured", not "configured as an empty string".
 | `RATE_LIMIT_MAX`       | `120`      | Requests per window, keyed on session then IP                                                                             |
 | `RATE_LIMIT_WINDOW`    | `1 minute` |                                                                                                                           |
 
+Session cookies are `SameSite=Lax`, so the API has to be served from the same registrable
+domain as the website (`api.example.com` alongside `example.com`). On a different domain
+the browser drops the cookie on every cross-site request and the dashboard sees nothing but
+401s, with no CORS error to point at the cause. See
+[website integration](website-integration.md).
+
 ## Synchronization
 
 | Variable                      | Default       | Notes                                                                                                                                                                                   |

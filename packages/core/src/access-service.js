@@ -114,7 +114,7 @@ export function augmentActorWithTier(actor, level) {
  * `role_access_tiers` table not existing yet, before the migration is applied) degrades to
  * "no tier" rather than propagating and breaking the whole bot.
  */
-async function resolveTierLevelForMember({ discordUserId, gateway, prisma }) {
+export async function resolveTierLevelForMember({ discordUserId, gateway, prisma }) {
   try {
     const mainGuild = await prisma.approvedGuild.findFirst({
       where: { type: GuildType.MAIN_COMMUNITY, enabled: true, ...notDeleted },
@@ -211,7 +211,106 @@ export async function resolveDiscordActor({ discordUserId, displayName, gateway,
     actor = await loadActor({ userId: user.id, prisma: db, required: true });
   }
 
+  await syncWebsiteAccess({ user: actor.user, level, prisma: db });
+
   return augmentActorWithTier(actor, level);
+}
+
+/**
+ * Keeps `websiteAccess` in step with the member's Discord tier.
+ *
+ * Website access follows the same rule as bot access: holding a mapped staff role grants
+ * it, losing the role takes it away. Unlike the tier itself - which is recomputed live on
+ * every command - this has to be persisted, because the API process has no Discord
+ * gateway and so cannot read anybody's roles at sign-in time.
+ *
+ * Persisting it makes the flag a cache, and a cache can go stale: somebody who loses their
+ * role and never runs another command would keep website access until something notices.
+ * Three things do. This function (every command), the role-change event handler, and the
+ * scheduled sweep, which recomputes the whole main guild and is the backstop that makes
+ * the other two optimisations rather than requirements.
+ *
+ * An explicit grant is never revoked here. `websiteAccess` set by hand on an account with
+ * no tier is somebody's deliberate decision, and a tier sweep is not the place to override
+ * it - so only access this function granted is taken back.
+ */
+export async function syncWebsiteAccess({ user, level, prisma = getPrisma() }) {
+  const shouldHave = level > 0;
+  if (user.websiteAccess === shouldHave) return { changed: false };
+
+  // Granting is unconditional; revoking only undoes a grant that came from a tier.
+  if (!shouldHave && !user.accessFromTier) return { changed: false };
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { websiteAccess: shouldHave, accessFromTier: shouldHave },
+  });
+
+  await recordAudit(prisma, {
+    ctx: { actor: { user: { id: user.id } }, source: ActionSource.SYSTEM },
+    action: shouldHave ? AuditAction.WEBSITE_ACCESS_GRANTED : AuditAction.WEBSITE_ACCESS_REVOKED,
+    targetUserId: user.id,
+    reason: shouldHave
+      ? 'Holds a Discord role mapped to an access tier'
+      : 'No longer holds a Discord role mapped to an access tier',
+    newState: { websiteAccess: shouldHave, tierLevel: level },
+  }).catch(() => {});
+
+  log.info({ userId: user.id, websiteAccess: shouldHave }, 'website access updated from tier');
+  return { changed: true, websiteAccess: shouldHave };
+}
+
+/**
+ * Recomputes website access for everybody in the main community guild.
+ *
+ * The backstop. Runs on the maintenance schedule, so a member who was promoted or removed
+ * while the bot was down - or who simply never ran a command - converges anyway.
+ *
+ * @param {object} params
+ * @param {object} params.gateway
+ * @param {import('@prisma/client').PrismaClient} [params.prisma]
+ */
+export async function reconcileWebsiteAccess({ gateway, prisma = getPrisma() }) {
+  const mainGuild = await prisma.approvedGuild.findFirst({
+    where: { type: GuildType.MAIN_COMMUNITY, enabled: true, ...notDeleted },
+  });
+  if (!mainGuild || !gateway) return { checked: 0, changed: 0 };
+
+  const rules = await prisma.roleAccessTier.findMany({
+    where: notDeleted,
+    select: { discordRoleId: true, permissionLevel: true },
+  });
+  if (rules.length === 0) return { checked: 0, changed: 0 };
+
+  const members = await gateway.listMembers(mainGuild.discordGuildId).catch((error) => {
+    log.error({ err: serializeError(error) }, 'could not list main guild for access sweep');
+    return [];
+  });
+  const levelByDiscordId = new Map(
+    members.map((member) => [member.id, resolveTierLevel(rules, member.roleIds)]),
+  );
+
+  // Everybody the platform knows about who either holds access now or might gain it.
+  const users = await prisma.user.findMany({
+    where: {
+      ...notDeleted,
+      OR: [{ websiteAccess: true }, { primaryDiscordId: { in: [...levelByDiscordId.keys()] } }],
+    },
+    select: { id: true, primaryDiscordId: true, websiteAccess: true, accessFromTier: true },
+  });
+
+  let changed = 0;
+  for (const user of users) {
+    const level = levelByDiscordId.get(user.primaryDiscordId ?? '') ?? 0;
+    const result = await syncWebsiteAccess({ user, level, prisma }).catch((error) => {
+      log.error({ err: serializeError(error), userId: user.id }, 'website access sync failed');
+      return { changed: false };
+    });
+    if (result.changed) changed += 1;
+  }
+
+  log.info({ checked: users.length, changed }, 'website access sweep complete');
+  return { checked: users.length, changed };
 }
 
 // ---------------------------------------------------------------------------

@@ -178,6 +178,10 @@ model User {
   permissionLevel  Int        @default(0)
   /// Whether the account may sign in to the department hub website.
   websiteAccess    Boolean    @default(false)
+  /// True when `websiteAccess` was granted by a Discord access tier rather than by hand.
+  /// Only tier-granted access is taken back when the role goes away, so an explicit grant
+  /// is never silently revoked by a sweep.
+  accessFromTier   Boolean    @default(false)
   /// Denormalized copy of the primary DiscordIdentity for fast lookups.
   primaryDiscordId String?    @unique
   createdAt        DateTime   @default(now())
@@ -264,8 +268,8 @@ model ApprovedGuild {
   removedBy    User? @relation("GuildRemover", fields: [removedById], references: [id], onDelete: Restrict)
 
   managedRoles   ManagedRole[]
-  sourceMappings RoleMapping[] @relation("MappingSourceGuild")
-  targetMappings RoleMapping[] @relation("MappingTargetGuild")
+  sourceMappings RoleMapping[]   @relation("MappingSourceGuild")
+  targetMappings RoleMapping[]   @relation("MappingTargetGuild")
   roleGrantRules RoleGrantRule[]
   syncJobs       SyncJob[]
   syncActions    SyncAction[]
@@ -287,18 +291,18 @@ model ApprovedGuild {
 /// only ever remove a role that has a row here: everything else is a member's own
 /// business and is never touched.
 model ManagedRole {
-  id              String          @id @default(uuid()) @db.Uuid
-  approvedGuildId String          @db.Uuid
-  discordRoleId   String
-  name            String
-  purpose         RolePurpose     @default(MAPPING)
-  protectionLevel ProtectionLevel @default(NONE)
+  id                String          @id @default(uuid()) @db.Uuid
+  approvedGuildId   String          @db.Uuid
+  discordRoleId     String
+  name              String
+  purpose           RolePurpose     @default(MAPPING)
+  protectionLevel   ProtectionLevel @default(NONE)
   /// False marks a role as "known but hands off" - it participates in conflict
   /// detection but is never added or removed automatically.
-  managedByPlatform Boolean       @default(true)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  deletedAt       DateTime?
+  managedByPlatform Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  deletedAt         DateTime?
 
   guild        ApprovedGuild     @relation(fields: [approvedGuildId], references: [id], onDelete: Cascade)
   manualGrants ManualRoleGrant[]
@@ -334,26 +338,26 @@ model ManualRoleGrant {
 }
 
 model RoleMapping {
-  id            String           @id @default(uuid()) @db.Uuid
-  name          String
-  sourceGuildId String           @db.Uuid
-  sourceRoleId  String
-  targetGuildId String           @db.Uuid
-  targetRoleId  String
-  direction     MappingDirection @default(ONE_WAY)
-  authority     AuthoritySource  @default(SOURCE_DISCORD)
-  syncAdd       Boolean          @default(true)
-  syncRemove    Boolean          @default(true)
-  enabled       Boolean          @default(false)
-  priority      Int              @default(100)
+  id               String           @id @default(uuid()) @db.Uuid
+  name             String
+  sourceGuildId    String           @db.Uuid
+  sourceRoleId     String
+  targetGuildId    String           @db.Uuid
+  targetRoleId     String
+  direction        MappingDirection @default(ONE_WAY)
+  authority        AuthoritySource  @default(SOURCE_DISCORD)
+  syncAdd          Boolean          @default(true)
+  syncRemove       Boolean          @default(true)
+  enabled          Boolean          @default(false)
+  priority         Int              @default(100)
   /// Set when either side is a protected role: the mapping cannot be enabled until a
   /// second authorized approver signs off.
-  requiresApproval Boolean       @default(false)
-  approvedAt    DateTime?
-  createdById   String?          @db.Uuid
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  deletedAt     DateTime?
+  requiresApproval Boolean          @default(false)
+  approvedAt       DateTime?
+  createdById      String?          @db.Uuid
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  deletedAt        DateTime?
 
   sourceGuild ApprovedGuild @relation("MappingSourceGuild", fields: [sourceGuildId], references: [id], onDelete: Cascade)
   targetGuild ApprovedGuild @relation("MappingTargetGuild", fields: [targetGuildId], references: [id], onDelete: Cascade)
@@ -437,24 +441,24 @@ model RoleAccessTier {
 /// who is on it and whose nicknames get rewritten. A community with one staff roster and
 /// a roster per department models each as its own row; nothing else has to change.
 model Roster {
-  id              String   @id @default(uuid()) @db.Uuid
+  id                  String    @id @default(uuid()) @db.Uuid
   /// URL-safe identifier the website addresses this roster by. Stable across renames.
-  slug            String   @unique
-  name            String
-  description     String?
-  approvedGuildId String   @db.Uuid
+  slug                String    @unique
+  name                String
+  description         String?
+  approvedGuildId     String    @db.Uuid
   /// Whether the public API serves this roster. A roster can be configured and
   /// reconciled for a while before anybody outside Discord sees it.
-  published       Boolean  @default(true)
+  published           Boolean   @default(true)
   /// Ordering on the website, and the tie-break when a member sits on two rosters in
   /// one guild: the lowest position owns their nickname.
-  position        Int      @default(0)
+  position            Int       @default(0)
   /// Whether membership of this roster rewrites Discord nicknames.
-  nicknameSyncEnabled Boolean @default(true)
-  createdById     String?   @db.Uuid
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  deletedAt       DateTime?
+  nicknameSyncEnabled Boolean   @default(true)
+  createdById         String?   @db.Uuid
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
 
   guild       ApprovedGuild      @relation(fields: [approvedGuildId], references: [id], onDelete: Cascade)
   createdBy   User?              @relation("RosterCreator", fields: [createdById], references: [id], onDelete: Restrict)
@@ -471,8 +475,8 @@ model Roster {
 /// The binding is what makes Discord the source of truth: holding the role *is* being
 /// that rank. Nothing grants a rank directly.
 model RosterRank {
-  id            String @id @default(uuid()) @db.Uuid
-  rosterId      String @db.Uuid
+  id            String    @id @default(uuid()) @db.Uuid
+  rosterId      String    @db.Uuid
   /// The role in the roster's guild that confers this rank.
   discordRoleId String
   name          String
@@ -499,29 +503,29 @@ model RosterRank {
 /// roster whether or not they have ever signed in to the website. `userId` is filled in
 /// when an identity exists so the record joins up with the rest of the platform.
 model RosterMembership {
-  id            String                  @id @default(uuid()) @db.Uuid
-  rosterId      String                  @db.Uuid
-  discordUserId String
-  userId        String?                 @db.Uuid
-  rankId        String?                 @db.Uuid
+  id              String                 @id @default(uuid()) @db.Uuid
+  rosterId        String                 @db.Uuid
+  discordUserId   String
+  userId          String?                @db.Uuid
+  rankId          String?                @db.Uuid
   /// In-game callsign shown before the rank, e.g. "165". Set by a human; never derived.
-  callsign      String?
+  callsign        String?
   /// An explicit override set by an administrator. Null unless somebody has set one,
   /// which is what makes it authoritative: when it is present the member cannot rename
   /// themselves out of it, and when it is absent their own nickname decides.
-  preferredName String?
+  preferredName   String?
   /// The name segment last resolved for this member - from their override, their
   /// nickname, or their username. Derived, never authoritative; the website reads it so
   /// a roster page does not have to re-derive names for everybody on every request.
-  displayName   String?
-  status        RosterMembershipStatus  @default(ACTIVE)
+  displayName     String?
+  status          RosterMembershipStatus @default(ACTIVE)
   /// The last nickname the platform wrote, so an externally changed nickname can be
   /// told apart from one that is simply out of date.
   managedNickname String?
-  joinedAt      DateTime                @default(now())
-  departedAt    DateTime?
-  createdAt     DateTime                @default(now())
-  updatedAt     DateTime                @updatedAt
+  joinedAt        DateTime               @default(now())
+  departedAt      DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
 
   roster Roster      @relation(fields: [rosterId], references: [id], onDelete: Cascade)
   rank   RosterRank? @relation(fields: [rankId], references: [id], onDelete: SetNull)

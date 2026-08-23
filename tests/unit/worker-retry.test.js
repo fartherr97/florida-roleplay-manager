@@ -13,6 +13,7 @@ const runSyncJob = vi.fn();
 const runMappingValidation = vi.fn();
 const runScheduledReconciliation = vi.fn();
 const runScheduledRosterSweep = vi.fn();
+const reconcileWebsiteAccess = vi.fn();
 const validateManagedRoles = vi.fn();
 
 vi.mock('@frm/core', () => ({
@@ -20,6 +21,7 @@ vi.mock('@frm/core', () => ({
   runMappingValidation: (...args) => runMappingValidation(...args),
   runScheduledReconciliation: (...args) => runScheduledReconciliation(...args),
   runScheduledRosterSweep: (...args) => runScheduledRosterSweep(...args),
+  reconcileWebsiteAccess: (...args) => reconcileWebsiteAccess(...args),
   runRosterJob: vi.fn(),
   validateManagedRoles: (...args) => validateManagedRoles(...args),
 }));
@@ -126,6 +128,8 @@ describe('maintenance processor', () => {
     runScheduledReconciliation.mockReset();
     runScheduledRosterSweep.mockReset();
     runScheduledRosterSweep.mockResolvedValue({ queued: 0, rosters: [] });
+    reconcileWebsiteAccess.mockReset();
+    reconcileWebsiteAccess.mockResolvedValue({ checked: 0, changed: 0 });
     validateManagedRoles.mockReset();
   });
 
@@ -161,13 +165,15 @@ describe('maintenance processor', () => {
     );
 
     expect(result).toEqual({ syncJobId: 'sync-job-9', status: 'COMPLETED' });
-    // Roster drift is swept on the same schedule as role drift.
+    // Roster drift and website access are swept on the same schedule as role drift.
     expect(runScheduledRosterSweep).toHaveBeenCalledTimes(1);
+    expect(reconcileWebsiteAccess).toHaveBeenCalledTimes(1);
   });
 
   it('does not let a roster sweep failure fail scheduled reconciliation', async () => {
     runScheduledReconciliation.mockResolvedValue({ id: 'sync-job-9', status: 'COMPLETED' });
     runScheduledRosterSweep.mockRejectedValue(new Error('roster sweep exploded'));
+    reconcileWebsiteAccess.mockRejectedValue(new Error('access sweep exploded'));
 
     const result = await createMaintenanceProcessor({ gateway: {} })(
       fakeJob({ name: JobName.SCHEDULED_RECONCILIATION }),

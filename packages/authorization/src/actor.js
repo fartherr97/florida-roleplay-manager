@@ -58,6 +58,7 @@ export async function loadActor({ userId, discordUserId, prisma = getPrisma(), r
       status: user.status,
       permissionLevel: user.permissionLevel,
       websiteAccess: user.websiteAccess,
+      accessFromTier: user.accessFromTier,
     }),
     discordUserId:
       discordUserId ?? user.discordIdentities[0]?.discordUserId ?? user.primaryDiscordId ?? null,

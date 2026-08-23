@@ -240,6 +240,8 @@ export const AuditAction = Object.freeze({
 
   ACCESS_TIER_SET: 'access.tier_set',
   ACCESS_TIER_REMOVED: 'access.tier_removed',
+  WEBSITE_ACCESS_GRANTED: 'access.website_granted',
+  WEBSITE_ACCESS_REVOKED: 'access.website_revoked',
 
   SYNC_JOB_CREATED: 'sync.job_created',
   SYNC_JOB_COMPLETED: 'sync.job_completed',

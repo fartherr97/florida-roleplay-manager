@@ -6,6 +6,7 @@
  */
 import { createLogger, serializeError } from '@frm/logging';
 import {
+  reconcileWebsiteAccess,
   runMappingValidation,
   runRosterJob,
   runScheduledReconciliation,
@@ -88,6 +89,11 @@ export function createMaintenanceProcessor({ gateway }) {
         // reason: events can be missed while the bot is restarting.
         await runScheduledRosterSweep({ prisma }).catch((error) => {
           log.error({ err: serializeError(error) }, 'scheduled roster sweep failed');
+        });
+        // The backstop for website access: a member who lost their staff role while the
+        // bot was down would otherwise keep the dashboard until they ran a command.
+        await reconcileWebsiteAccess({ gateway, prisma }).catch((error) => {
+          log.error({ err: serializeError(error) }, 'website access sweep failed');
         });
         return { syncJobId: result?.id, status: result?.status };
       }

@@ -24,18 +24,21 @@ import { createLogger, serializeError } from '@frm/logging';
 import {
   ActionSource,
   AuditAction,
+  GuildType,
   IssueSeverity,
   RosterMembershipStatus,
   SyncActionType,
   SyncIssueType,
   SyncJobType,
 } from '@frm/shared';
+import { loadActor } from '@frm/authorization';
 import { claimNicknameMarker, claimSyncMarker } from '@frm/queue';
 import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
 import { createSyncJob, enqueueSyncJob } from './sync-service.js';
 import { findApprovedGuildBySnowflake } from './resolve.js';
 import { queueRosterSync } from './roster-service.js';
+import { resolveTierLevelForMember, syncWebsiteAccess } from './access-service.js';
 import { notifyGlobalAdmins } from './notify.js';
 
 const log = createLogger('core.events');
@@ -49,6 +52,8 @@ const log = createLogger('core.events');
  * @param {string[]} params.addedRoleIds
  * @param {string[]} params.removedRoleIds
  * @param {string|null} [params.executorDiscordId] who made the change, from the audit log
+ * @param {object} [params.gateway] used to re-read live roles when an access-tier role
+ *   changed, so website access is revoked immediately rather than at the next sweep
  * @param {import('@prisma/client').PrismaClient} [params.prisma]
  * @returns {Promise<{queued: boolean, reason: string, systemChanges?: number}>}
  */
@@ -58,6 +63,7 @@ export async function handleMemberRoleChange({
   addedRoleIds = [],
   removedRoleIds = [],
   executorDiscordId = null,
+  gateway = null,
   prisma = getPrisma(),
 }) {
   const guild = await findApprovedGuildBySnowflake(discordGuildId, prisma);
@@ -108,7 +114,21 @@ export async function handleMemberRoleChange({
     return { queued: false, reason: 'all changes were system generated', systemChanges };
   }
 
-  // Step 2a: rosters. Evaluated before the mapping check returns, because a rank role is
+  // Step 2a: website access. A tier-mapped role changing hands is the one case where a
+  // stale `websiteAccess` flag matters, so it is recomputed from live roles here rather
+  // than left to the scheduled sweep - losing a staff role should lose the dashboard now,
+  // not in six hours.
+  await syncWebsiteAccessForRoleChange({
+    prisma,
+    guild,
+    discordUserId,
+    roleIds: changedRoleIds,
+    gateway,
+  }).catch((error) => {
+    log.error({ err: serializeError(error) }, 'website access sync failed');
+  });
+
+  // Step 2b: rosters. Evaluated before the mapping check returns, because a rank role is
   // frequently neither managed nor mapped - it exists only to say who is a Senior Admin.
   const rosterResult = await queueRosterSyncForRoles({
     prisma,
@@ -118,7 +138,7 @@ export async function handleMemberRoleChange({
     executorDiscordId,
   });
 
-  // Step 2b: is any changed role relevant to role synchronization?
+  // Step 2c: is any changed role relevant to role synchronization?
   const relevant = await filterRelevantRoles(prisma, guild.id, changedRoleIds);
   if (relevant.length === 0) {
     return {
@@ -190,6 +210,27 @@ export async function handleMemberRoleChange({
     systemChanges,
     ...rosterResult,
   };
+}
+
+/**
+ * Recomputes website access when a changed role is mapped to an access tier.
+ *
+ * Only touches the member when one of the changed roles is actually tier-mapped, so an
+ * ordinary role change costs one indexed query and nothing else.
+ */
+async function syncWebsiteAccessForRoleChange({ prisma, guild, discordUserId, roleIds, gateway }) {
+  if (!gateway || guild.type !== GuildType.MAIN_COMMUNITY) return;
+
+  const mapped = await prisma.roleAccessTier.count({
+    where: { ...notDeleted, discordRoleId: { in: roleIds } },
+  });
+  if (mapped === 0) return;
+
+  const actor = await loadActor({ discordUserId, prisma, required: false });
+  if (!actor) return;
+
+  const level = await resolveTierLevelForMember({ discordUserId, gateway, prisma });
+  await syncWebsiteAccess({ user: actor.user, level, prisma });
 }
 
 /**

@@ -194,6 +194,7 @@ Coverage of the specification's required cases lives in `tests/`:
 - [Architecture](docs/architecture.md) — how the pieces fit, and the rules that hold
 - [Implementation plan and risk analysis](docs/implementation-plan.md)
 - [Local development](docs/development.md)
+- [Website integration](docs/website-integration.md) — the contract the community site builds against
 - [Rosters](docs/rosters.md) — how Discord roles drive the website rosters, and the API the site reads
 - [Discord application setup](docs/discord-setup.md)
 - [Environment variables](docs/environment.md)
