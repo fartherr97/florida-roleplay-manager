@@ -195,6 +195,7 @@ Coverage of the specification's required cases lives in `tests/`:
 - [Implementation plan and risk analysis](docs/implementation-plan.md)
 - [Local development](docs/development.md)
 - [Website integration](docs/website-integration.md) — the contract the community site builds against
+- [Frontend handoff](docs/website-frontend-prompt.md) — a self-contained brief for whoever builds the dashboard
 - [Rosters](docs/rosters.md) — how Discord roles drive the website rosters, and the API the site reads
 - [Discord application setup](docs/discord-setup.md)
 - [Environment variables](docs/environment.md)
