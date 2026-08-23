@@ -308,6 +308,26 @@ export async function setRosterMemberDetails(ctx, input) {
     );
   }
 
+  // A callsign identifies somebody on the roster and over the radio, so two people
+  // wearing the same one is a data-entry mistake worth refusing rather than publishing.
+  if (data.callsign) {
+    const taken = await prisma.rosterMembership.findFirst({
+      where: {
+        rosterId: roster.id,
+        callsign: data.callsign,
+        status: RosterMembershipStatus.ACTIVE,
+        NOT: { id: membership.id },
+      },
+      select: { discordUserId: true },
+    });
+    if (taken) {
+      throw new ConflictError(
+        `Callsign ${data.callsign} is already held by <@${taken.discordUserId}> on this roster.`,
+        { slug: roster.slug, callsign: data.callsign, heldBy: taken.discordUserId },
+      );
+    }
+  }
+
   const patch = {};
   if (data.callsign !== undefined) patch.callsign = data.callsign ?? null;
   if (data.preferredName !== undefined) patch.preferredName = data.preferredName ?? null;

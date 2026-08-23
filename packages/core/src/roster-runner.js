@@ -21,11 +21,13 @@ import {
   RosterMembershipStatus,
   SyncIssueType,
   SyncJobStatus,
+  getEnv,
 } from '@frm/shared';
 import { checkNicknameOperation } from '@frm/discord';
 import { discardNicknameMarker, withMemberLock, writeNicknameMarker } from '@frm/queue';
 import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
+import { notifyGlobalAdmins } from './notify.js';
 import { planMemberChange, planRosterChanges } from './roster-resolve.js';
 import { queueRosterSync } from './roster-service.js';
 
@@ -62,6 +64,12 @@ export async function runRosterJob({ jobId, gateway, prisma = getPrisma() }) {
 
   try {
     const result = await reconcile({ job, gateway, prisma });
+
+    // A paused job has already recorded its own terminal state and must not be
+    // overwritten here, or the threshold guard would report success.
+    if (result.paused) {
+      return { status: SyncJobStatus.PAUSED, ...result };
+    }
 
     const status =
       result.failed > 0 && result.applied > 0
@@ -128,10 +136,36 @@ async function reconcile({ job, gateway, prisma }) {
 
   if (changes.length === 0) return { applied: 0, failed: 0, changes: 0 };
 
+  // A plan that takes half the staff team off the roster is far more likely to be a
+  // misconfiguration - a deleted rank role, a rank unbound by mistake - than a real mass
+  // resignation. Stop and let a human look, exactly as the role engine does.
+  const removals = changes.filter((change) => change.type === 'REMOVE').length;
+  const threshold = await removalThreshold(prisma);
+  if (removals > threshold) {
+    await pauseForThreshold({ job, roster, prisma, removals, threshold, changes });
+    return { applied: 0, failed: 0, changes: changes.length, paused: true };
+  }
+
+  // Which roster owns each member's nickname. Only relevant when a guild has more than
+  // one nickname-writing roster, but then it matters a lot: without it two rosters would
+  // alternately overwrite the same person on every sync.
+  const nicknameOwners = await resolveNicknameOwners({
+    prisma,
+    roster,
+    discordUserIds: changes.filter((change) => change.nickname).map((c) => c.discordUserId),
+  });
+
   let applied = 0;
   let failed = 0;
 
-  for (const change of changes) {
+  for (const planned of changes) {
+    // Their nickname may belong to a higher-priority roster. This one still owns their
+    // membership row, so the change is applied - without the rename.
+    const change =
+      planned.nickname && nicknameOwners.get(planned.discordUserId) !== roster.id
+        ? { ...planned, nickname: null }
+        : planned;
+
     // The same lock the role engine uses, so a roster sync and a role sync can never
     // interleave their writes for one person.
     const outcome = await withMemberLock(change.discordUserId, () =>
@@ -147,6 +181,117 @@ async function reconcile({ job, gateway, prisma }) {
   }
 
   return { applied, failed, changes: changes.length };
+}
+
+/**
+ * Decides which roster owns each member's nickname.
+ *
+ * A member can sit on more than one roster in the same guild - the staff team and their
+ * department, say - and a nickname has room for exactly one rank. The roster with the
+ * lowest `position` wins, with the slug as a stable tie-break, so the answer is the same
+ * whichever roster's job happens to run first. Without this the two rosters overwrite
+ * each other forever, each one's write looking to the other like drift to correct.
+ *
+ * @returns {Promise<Map<string, string>>} discord user id -> owning roster id
+ */
+async function resolveNicknameOwners({ prisma, roster, discordUserIds }) {
+  const owners = new Map();
+  if (discordUserIds.length === 0) return owners;
+
+  // Every other nickname-writing roster in this guild that these members are on. The
+  // roster being reconciled is included implicitly: they are on it by definition.
+  const competing = await prisma.rosterMembership.findMany({
+    where: {
+      discordUserId: { in: discordUserIds },
+      status: RosterMembershipStatus.ACTIVE,
+      rosterId: { not: roster.id },
+      roster: {
+        ...notDeleted,
+        approvedGuildId: roster.approvedGuildId,
+        nicknameSyncEnabled: true,
+      },
+    },
+    select: {
+      discordUserId: true,
+      roster: { select: { id: true, slug: true, position: true } },
+    },
+  });
+
+  const byMember = new Map(discordUserIds.map((id) => [id, [self(roster)]]));
+  for (const row of competing) {
+    byMember.get(row.discordUserId)?.push(row.roster);
+  }
+
+  for (const [discordUserId, candidates] of byMember) {
+    candidates.sort((a, b) => a.position - b.position || a.slug.localeCompare(b.slug));
+    owners.set(discordUserId, candidates[0].id);
+  }
+  return owners;
+}
+
+const self = (roster) => ({ id: roster.id, slug: roster.slug, position: roster.position });
+
+/** The configured maximum-change threshold, falling back to the environment value. */
+async function removalThreshold(prisma) {
+  const setting = await prisma.systemSetting
+    .findUnique({ where: { key: 'sync.maxRemovalsThreshold' } })
+    .catch(() => null);
+  const value = Number(setting?.value);
+  return Number.isFinite(value) && value > 0 ? value : getEnv().SYNC_MAX_REMOVALS_THRESHOLD;
+}
+
+/**
+ * Records what the job wanted to do and stops, rather than emptying a roster.
+ *
+ * Nothing is applied: no memberships change and no nicknames are rewritten. An
+ * administrator can see the whole plan, decide whether it is right, and either fix the
+ * configuration or re-run with a raised threshold.
+ */
+async function pauseForThreshold({ job, roster, prisma, removals, threshold, changes }) {
+  await prisma.syncJob.update({
+    where: { id: job.id },
+    data: {
+      status: SyncJobStatus.PAUSED,
+      thresholdBreached: true,
+      completedAt: new Date(),
+      progressTotal: changes.length,
+      error: {
+        reason: 'THRESHOLD_EXCEEDED',
+        removalCount: removals,
+        threshold,
+        roster: roster.slug,
+      },
+    },
+  });
+
+  await prisma.syncIssue.create({
+    data: {
+      type: SyncIssueType.THRESHOLD_EXCEEDED,
+      severity: IssueSeverity.CRITICAL,
+      approvedGuildId: roster.approvedGuildId,
+      syncJobId: job.id,
+      message:
+        `Reconciling "${roster.name}" would have removed ${removals} members, above the ` +
+        `threshold of ${threshold}. Nothing was changed. This usually means a rank role was ` +
+        'deleted or unbound rather than that everybody left.',
+      details: {
+        roster: roster.slug,
+        removals: changes
+          .filter((change) => change.type === 'REMOVE')
+          .map((change) => change.discordUserId),
+      },
+    },
+  });
+
+  await notifyGlobalAdmins({
+    title: 'A roster reconciliation was paused',
+    description:
+      `Reconciling **${roster.name}** would have removed ${removals} members (threshold ` +
+      `${threshold}). Nothing was changed. Check that a rank role has not been deleted.`,
+    severity: 'critical',
+  }).catch(() => {});
+
+  log.warn({ jobId: job.id, slug: roster.slug, removals, threshold }, 'roster job paused');
 }
 
 /** Plans a single member: the hot path, driven by a role change event. */

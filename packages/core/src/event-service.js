@@ -442,7 +442,7 @@ export async function handleRoleDeleted({
   const guild = await findApprovedGuildBySnowflake(discordGuildId, prisma);
   if (!guild) return { affected: 0 };
 
-  const [managedRoles, mappings] = await Promise.all([
+  const [managedRoles, mappings, rosterRanks] = await Promise.all([
     prisma.managedRole.findMany({
       where: { approvedGuildId: guild.id, discordRoleId, ...notDeleted },
     }),
@@ -455,9 +455,27 @@ export async function handleRoleDeleted({
         ],
       },
     }),
+    prisma.rosterRank.findMany({
+      where: {
+        ...notDeleted,
+        discordRoleId,
+        roster: { ...notDeleted, approvedGuildId: guild.id },
+      },
+      include: { roster: { select: { id: true, slug: true, name: true } } },
+    }),
   ]);
 
-  if (managedRoles.length === 0 && mappings.length === 0) return { affected: 0 };
+  // The rank has to be unbound explicitly. If it were left bound, the next
+  // reconciliation would find that nobody holds a role that no longer exists, conclude
+  // the entire rank has resigned, and strip every one of them from the roster and their
+  // nicknames. Unbinding leaves them on the roster without a rank, which is recoverable.
+  if (rosterRanks.length > 0) {
+    await unbindDeletedRanks({ prisma, guild, discordRoleId, roleName, rosterRanks });
+  }
+
+  if (managedRoles.length === 0 && mappings.length === 0) {
+    return { affected: rosterRanks.length, rosterRanks: rosterRanks.length };
+  }
 
   const ctx = systemContext({ label: 'discord-event' });
 
@@ -524,6 +542,77 @@ export async function handleRoleDeleted({
   });
 
   return { affected: managedRoles.length + mappings.length, disabledMappings: mappings.length };
+}
+
+/**
+ * Unbinds roster ranks whose Discord role has been deleted.
+ *
+ * Members keep their place on the roster, unranked, rather than being removed: a deleted
+ * role is usually a restructure or a mistake, and quietly taking 30 people off a public
+ * roster - and renaming all of them - is not a reasonable answer to either.
+ */
+async function unbindDeletedRanks({ prisma, guild, discordRoleId, roleName, rosterRanks }) {
+  const ctx = systemContext({ label: 'discord-event' });
+  const affected = await prisma.rosterMembership.count({
+    where: { rankId: { in: rosterRanks.map((rank) => rank.id) } },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.rosterMembership.updateMany({
+      where: { rankId: { in: rosterRanks.map((rank) => rank.id) } },
+      data: { rankId: null },
+    });
+    await tx.rosterRank.updateMany({
+      where: { id: { in: rosterRanks.map((rank) => rank.id) } },
+      data: { deletedAt: new Date() },
+    });
+
+    for (const rank of rosterRanks) {
+      await tx.syncIssue.create({
+        data: {
+          type: SyncIssueType.ROLE_DELETED,
+          severity: IssueSeverity.ERROR,
+          approvedGuildId: guild.id,
+          discordGuildId: guild.discordGuildId,
+          discordRoleId,
+          message:
+            `The role "${roleName ?? discordRoleId}" conferred the rank "${rank.name}" on ` +
+            `roster "${rank.roster.slug}" and was deleted in Discord. The rank has been ` +
+            'unbound; anybody holding it stays on the roster without a rank. Bind a ' +
+            'replacement role with /roster rank.',
+          details: { roster: rank.roster.slug, rank: rank.name, affectedMembers: affected },
+        },
+      });
+    }
+
+    await recordAudit(tx, {
+      ctx,
+      action: AuditAction.ROSTER_RANK_UNBOUND,
+      approvedGuildId: guild.id,
+      reason: 'Discord role deleted',
+      previousState: {
+        discordRoleId,
+        roleName: roleName ?? null,
+        ranks: rosterRanks.map((rank) => `${rank.roster.slug}:${rank.name}`),
+        affectedMembers: affected,
+      },
+      success: false,
+    });
+  });
+
+  await notifyGlobalAdmins({
+    title: 'A roster rank role was deleted',
+    description:
+      `Role \`${roleName ?? discordRoleId}\` in **${guild.name}** conferred ` +
+      `${rosterRanks.length} roster rank(s), affecting ${affected} member(s). The rank(s) ` +
+      'have been unbound and those members are now unranked on their roster.',
+    severity: 'critical',
+  }).catch(() => {});
+
+  log.warn(
+    { discordRoleId, ranks: rosterRanks.length, affected },
+    'roster ranks unbound after role deletion',
+  );
 }
 
 /**
