@@ -26,6 +26,15 @@ Concretely:
 API. Our website reads that API and renders the roster pages. The bot does not scrape or write
 to the website directly.
 
+**One bot, not two.** This ships as part of the existing Florida Roleplay Manager bot — same
+application, same token, same invite. That decision is made; don't re-open it. The reason: the
+roster tracker triggers on `guildMemberUpdate` role changes, which is the same signal the role
+sync engine already acts on, and it needs the same Redis loop-protection markers to tell "the bot
+did this" from "a human did this." A second gateway connection can't read those markers, so it
+would rename people in response to the first bot's own writes. If you want the roster work
+isolated for blast radius, isolate it as its own queue lane or worker process inside this repo —
+not as a second bot.
+
 ## Ground rules for this codebase
 
 This is an existing, working monorepo (`florida-roleplay-manager`). Build the roster tracker
@@ -148,9 +157,11 @@ with actor, before/after and correlation id — same as every other action in th
 - Update `README.md`, `docs/discord-setup.md` (the bot now needs **Manage Nicknames**, and its
   role must sit **above** every staff role it renames), `docs/environment.md` and `.env.example`
   for any new settings.
-- I've already created the application in the Discord developer portal and nothing else. Tell me
-  exactly which intents to enable (Server Members is privileged) and which permissions to include
-  in the invite URL.
+- The bot is already live under the existing token — no new application to configure. Tell me
+  exactly what I need to change on the existing one: the added permission bits, whether the
+  Server Members privileged intent is already required by the current code or is new, and the
+  re-invite URL if the permission integer changes. Also state plainly that the bot's own role has
+  to be dragged above the staff roles in the role list, because that's the failure everyone hits.
 
 ## How to work
 
