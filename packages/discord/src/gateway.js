@@ -225,6 +225,34 @@ export class DiscordJsRoleGateway {
   }
 
   /**
+   * Rewrites a member's nickname, or clears it when `nickname` is null.
+   *
+   * Discord refuses two renames that no permission can unlock: the guild owner, and any
+   * member whose highest role is at or above the bot's. Both surface as a 50013, which
+   * `mapDiscordError` reports as a missing permission - true, but not actionable. The
+   * pre-flight check distinguishes them before the call is ever made.
+   *
+   * @param {string} discordGuildId
+   * @param {string} discordUserId
+   * @param {string|null} nickname
+   * @param {string} reason audit-log reason shown in Discord
+   */
+  async setNickname(discordGuildId, discordUserId, nickname, reason) {
+    try {
+      const guild = await this.#requireGuild(discordGuildId);
+      const member = await guild.members.fetch(discordUserId);
+      await member.setNickname(nickname ?? null, truncateReason(reason));
+      return { applied: true, nickname: nickname ?? null };
+    } catch (error) {
+      log.warn(
+        { discordGuildId, discordUserId, err: serializeError(error) },
+        'set nickname failed',
+      );
+      throw mapDiscordError(error, { discordGuildId, discordUserId });
+    }
+  }
+
+  /**
    * Every category and channel in a guild, in the gateway's abstract shape.
    * Used by server provisioning to decide what already exists and must be skipped.
    *
@@ -424,6 +452,11 @@ export class ReadOnlyGatewayDecorator {
   async removeRole(discordGuildId, discordUserId, discordRoleId) {
     log.info({ discordGuildId, discordUserId, discordRoleId }, 'mock: would remove role');
     return { applied: false, mocked: true };
+  }
+
+  async setNickname(discordGuildId, discordUserId, nickname) {
+    log.info({ discordGuildId, discordUserId, nickname }, 'mock: would set nickname');
+    return { applied: false, mocked: true, nickname: nickname ?? null };
   }
 
   async createRole(discordGuildId, spec) {

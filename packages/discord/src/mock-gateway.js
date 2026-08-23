@@ -44,7 +44,9 @@ export class MockRoleGateway {
     botPresent = true,
     botCanManageRoles = true,
     botCanManageChannels = true,
+    botCanManageNicknames = true,
     botHighestRolePosition = 100,
+    ownerId = null,
   }) {
     this.guilds.set(id, {
       id,
@@ -53,7 +55,9 @@ export class MockRoleGateway {
       botPresent,
       botCanManageRoles,
       botCanManageChannels,
+      botCanManageNicknames,
       botHighestRolePosition,
+      ownerId,
     });
     if (!this.roles.has(id)) this.roles.set(id, new Map());
     if (!this.members.has(id)) this.members.set(id, new Map());
@@ -71,10 +75,19 @@ export class MockRoleGateway {
     return this;
   }
 
-  defineMember(guildId, { id, displayName = `Member ${id}`, roleIds = [] }) {
+  defineMember(guildId, { id, displayName = `Member ${id}`, nickname = null, roleIds = [] }) {
     if (!this.members.has(guildId)) this.members.set(guildId, new Map());
-    this.members.get(guildId).set(id, { id, displayName, roleIds: new Set(roleIds) });
+    // `displayName` is what Discord shows: the nickname when there is one, otherwise the
+    // username. Modelled separately because clearing a nickname must fall back, not blank.
+    this.members
+      .get(guildId)
+      .set(id, { id, username: displayName, nickname, roleIds: new Set(roleIds) });
     return this;
+  }
+
+  /** The nickname a member currently has, or null when they are using their username. */
+  nicknameOf(guildId, memberId) {
+    return this.members.get(guildId)?.get(memberId)?.nickname ?? null;
   }
 
   kickMember(guildId, memberId) {
@@ -130,11 +143,7 @@ export class MockRoleGateway {
   async getMember(discordGuildId, discordUserId) {
     const member = this.members.get(discordGuildId)?.get(discordUserId);
     if (!member) return null;
-    return {
-      id: member.id,
-      displayName: member.displayName,
-      roleIds: [...member.roleIds],
-    };
+    return this.#snapshot(discordGuildId, member);
   }
 
   async listGuilds() {
@@ -142,11 +151,31 @@ export class MockRoleGateway {
   }
 
   async listMembers(discordGuildId) {
-    return [...(this.members.get(discordGuildId)?.values() ?? [])].map((member) => ({
+    return [...(this.members.get(discordGuildId)?.values() ?? [])].map((member) =>
+      this.#snapshot(discordGuildId, member),
+    );
+  }
+
+  /**
+   * The gateway's member shape. `highestRolePosition` is what the nickname pre-flight
+   * compares against the bot, so it is computed from the roles the member actually holds.
+   */
+  #snapshot(guildId, member) {
+    const roles = this.roles.get(guildId);
+    let highest = 0;
+    for (const roleId of member.roleIds) {
+      const role = roles?.get(roleId);
+      if (role && !role.isEveryone && role.position > highest) highest = role.position;
+    }
+    return {
       id: member.id,
-      displayName: member.displayName,
+      displayName: member.nickname ?? member.username,
+      nickname: member.nickname ?? null,
+      username: member.username,
       roleIds: [...member.roleIds],
-    }));
+      highestRolePosition: highest,
+      isOwner: this.guilds.get(guildId)?.ownerId === member.id,
+    };
   }
 
   /** A pre-existing channel, for testing idempotent provisioning. */
@@ -221,6 +250,16 @@ export class MockRoleGateway {
     this.#requireRole(discordGuildId, discordRoleId);
     member.roleIds.delete(discordRoleId);
     return { applied: true };
+  }
+
+  async setNickname(discordGuildId, discordUserId, nickname, reason) {
+    this.calls.push({ action: 'SET_NICKNAME', discordGuildId, discordUserId, nickname, reason });
+    // Keyed on the member rather than a role, so `failNext(guild, user, null, code)`
+    // simulates a rejected rename.
+    this.#maybeFail(discordGuildId, discordUserId, null);
+    const member = this.#requireMember(discordGuildId, discordUserId);
+    member.nickname = nickname ?? null;
+    return { applied: true, nickname: member.nickname };
   }
 
   async leaveGuild(discordGuildId) {

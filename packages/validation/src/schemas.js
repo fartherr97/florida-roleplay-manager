@@ -269,6 +269,92 @@ export const removeAccessTierSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Rosters
+// ---------------------------------------------------------------------------
+
+/**
+ * A slug is what the website puts in a URL, so it is constrained here rather than
+ * sanitised later: lowercase, no spaces, no leading or trailing dashes.
+ */
+export const rosterSlug = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(2, 'A slug needs at least 2 characters')
+  .max(48)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Use lowercase letters, numbers and dashes only');
+
+/** Shown before the rank in a nickname, e.g. "165" or "4S-12". */
+export const callsign = z
+  .string()
+  .trim()
+  .max(10, 'A callsign must be 10 characters or fewer')
+  .regex(/^[A-Za-z0-9][A-Za-z0-9-]*$/, 'Use letters, numbers and dashes only');
+
+export const createRosterSchema = z.object({
+  slug: rosterSlug,
+  name: z.string().trim().min(2).max(80),
+  description: z.string().trim().max(500).optional(),
+  discordGuildId: snowflake,
+  published: z.boolean().optional(),
+  position: z.number().int().min(0).max(999).optional(),
+  nicknameSyncEnabled: z.boolean().optional(),
+  reason: optionalReason,
+});
+
+export const updateRosterSchema = z.object({
+  slug: rosterSlug,
+  name: z.string().trim().min(2).max(80).optional(),
+  description: z.string().trim().max(500).nullish(),
+  published: z.boolean().optional(),
+  position: z.number().int().min(0).max(999).optional(),
+  nicknameSyncEnabled: z.boolean().optional(),
+  reason: optionalReason,
+});
+
+export const deleteRosterSchema = z.object({
+  slug: rosterSlug,
+  reason: optionalReason,
+});
+
+export const bindRosterRankSchema = z.object({
+  slug: rosterSlug,
+  discordRoleId: snowflake,
+  name: z.string().trim().min(1).max(60),
+  shortName: z.string().trim().min(1).max(20).optional(),
+  position: z.number().int().min(0).max(999),
+  reason: optionalReason,
+});
+
+export const unbindRosterRankSchema = z.object({
+  slug: rosterSlug,
+  discordRoleId: snowflake,
+  reason: optionalReason,
+});
+
+export const rosterMemberDetailsSchema = z.object({
+  slug: rosterSlug,
+  discordUserId: snowflake,
+  // Explicit null clears the value; undefined leaves it alone. The bot sends null when
+  // an administrator uses the clear option, so the two cases must stay distinguishable.
+  callsign: callsign.nullish(),
+  preferredName: z.string().trim().min(1).max(32).nullish(),
+  reason: optionalReason,
+});
+
+export const syncRosterSchema = z.object({
+  slug: rosterSlug,
+  discordUserId: optionalSnowflake,
+  dryRun: z.boolean().optional(),
+  reason: optionalReason,
+});
+
+export const listRostersSchema = z.object({
+  discordGuildId: optionalSnowflake,
+  includeUnpublished: z.boolean().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // Members
 // ---------------------------------------------------------------------------
 

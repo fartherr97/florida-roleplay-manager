@@ -124,6 +124,72 @@ export async function checkRoleOperation(gateway, params) {
 }
 
 /**
+ * Validates a planned nickname rewrite against live Discord state.
+ *
+ * Renaming has its own hierarchy rule, and it is not the one role writes use. Discord
+ * refuses to let any bot rename the **guild owner** - no permission unlocks it - and
+ * refuses to rename a member whose own highest role is at or above the bot's. Both come
+ * back as a bare 50013 that reads as "missing permission", which sends an administrator
+ * looking in the wrong place. Checking first turns them into an instruction.
+ *
+ * @param {object} gateway
+ * @param {object} params
+ * @param {string} params.discordGuildId
+ * @param {string} params.discordUserId
+ * @returns {Promise<PreflightResult>}
+ */
+export async function checkNicknameOperation(gateway, { discordGuildId, discordUserId }) {
+  const guild = await gateway.getGuild(discordGuildId);
+  if (!guild) {
+    return fail(SyncIssueType.BOT_NOT_IN_GUILD, 'The bot is not a member of that Discord server.');
+  }
+  if (!guild.available) {
+    return fail(SyncIssueType.GUILD_UNAVAILABLE, 'That Discord server is currently unavailable.', {
+      retryable: true,
+    });
+  }
+  if (!guild.botPresent) {
+    return fail(SyncIssueType.BOT_NOT_IN_GUILD, 'The bot is not a member of that Discord server.');
+  }
+  if (guild.botCanManageNicknames === false) {
+    return fail(
+      SyncIssueType.BOT_MISSING_PERMISSION,
+      'The bot does not have the Manage Nicknames permission in that server.',
+    );
+  }
+
+  const member = await gateway.getMember(discordGuildId, discordUserId);
+  if (!member) {
+    return fail(
+      SyncIssueType.MEMBER_NOT_IN_GUILD,
+      'That member is not in the Discord server, so their nickname cannot be changed there.',
+      { severity: IssueSeverity.WARNING },
+    );
+  }
+  if (member.isOwner || guild.ownerId === discordUserId) {
+    return fail(
+      SyncIssueType.MEMBER_ABOVE_BOT,
+      'Discord does not allow any bot to rename the server owner. Set their nickname by hand; ' +
+        'their roster entry is still correct.',
+      { severity: IssueSeverity.WARNING },
+    );
+  }
+  if (
+    typeof member.highestRolePosition === 'number' &&
+    typeof guild.botHighestRolePosition === 'number' &&
+    member.highestRolePosition >= guild.botHighestRolePosition
+  ) {
+    return fail(
+      SyncIssueType.MEMBER_ABOVE_BOT,
+      "That member's highest role is at or above the bot's, so Discord will not let the bot " +
+        "rename them. Move the bot's role higher in Server Settings > Roles.",
+    );
+  }
+
+  return OK;
+}
+
+/**
  * Validates that a role may participate in a mapping.
  *
  * This runs when a mapping is created or enabled, where the caller is a human waiting

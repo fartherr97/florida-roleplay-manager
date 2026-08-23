@@ -12,12 +12,15 @@ import { DiscordOperationError, RETRY_POLICY, SyncIssueType } from '@frm/shared'
 const runSyncJob = vi.fn();
 const runMappingValidation = vi.fn();
 const runScheduledReconciliation = vi.fn();
+const runScheduledRosterSweep = vi.fn();
 const validateManagedRoles = vi.fn();
 
 vi.mock('@frm/core', () => ({
   runSyncJob: (...args) => runSyncJob(...args),
   runMappingValidation: (...args) => runMappingValidation(...args),
   runScheduledReconciliation: (...args) => runScheduledReconciliation(...args),
+  runScheduledRosterSweep: (...args) => runScheduledRosterSweep(...args),
+  runRosterJob: vi.fn(),
   validateManagedRoles: (...args) => validateManagedRoles(...args),
 }));
 
@@ -121,6 +124,8 @@ describe('maintenance processor', () => {
   beforeEach(() => {
     runMappingValidation.mockReset();
     runScheduledReconciliation.mockReset();
+    runScheduledRosterSweep.mockReset();
+    runScheduledRosterSweep.mockResolvedValue({ queued: 0, rosters: [] });
     validateManagedRoles.mockReset();
   });
 
@@ -150,6 +155,19 @@ describe('maintenance processor', () => {
 
   it('runs scheduled reconciliation', async () => {
     runScheduledReconciliation.mockResolvedValue({ id: 'sync-job-9', status: 'COMPLETED' });
+
+    const result = await createMaintenanceProcessor({ gateway: {} })(
+      fakeJob({ name: JobName.SCHEDULED_RECONCILIATION }),
+    );
+
+    expect(result).toEqual({ syncJobId: 'sync-job-9', status: 'COMPLETED' });
+    // Roster drift is swept on the same schedule as role drift.
+    expect(runScheduledRosterSweep).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a roster sweep failure fail scheduled reconciliation', async () => {
+    runScheduledReconciliation.mockResolvedValue({ id: 'sync-job-9', status: 'COMPLETED' });
+    runScheduledRosterSweep.mockRejectedValue(new Error('roster sweep exploded'));
 
     const result = await createMaintenanceProcessor({ gateway: {} })(
       fakeJob({ name: JobName.SCHEDULED_RECONCILIATION }),

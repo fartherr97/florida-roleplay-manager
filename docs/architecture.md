@@ -135,6 +135,26 @@ Loops are also prevented structurally: a mapping that would close a cycle is rej
 it is created or enabled. A single two-way mapping is _not_ a cycle (it is the feature);
 only loops built from two or more distinct mappings are refused.
 
+## Rosters
+
+Rosters are a second, independent consumer of the same Discord role-change event. A rank
+role is usually neither platform-managed nor mapped, so the mapping relevance check
+answering "nothing to do here" must not be allowed to skip the roster - both are evaluated
+and both are reported.
+
+They reuse the machinery rather than duplicating it: the same per-member lock, the same
+marker-based loop protection (in its own key space, since a nickname change has no role in
+it), the same desired-minus-actual reconciliation, and the same scheduled sweep. What is
+new is a Discord write that is not a role - `setNickname` - and its own pre-flight, because
+renaming has hierarchy rules that role writes do not: the guild owner can never be renamed
+by anybody, and neither can a member who outranks the bot.
+
+Roster jobs run on their own queue (`frm-roster`) rather than the sync queue, so a
+guild-wide roster rebuild queues behind other roster work instead of in front of the role
+synchronization somebody is waiting on.
+
+See [rosters.md](rosters.md) for the full subsystem.
+
 ## Concurrency and failure
 
 | Situation                              | Handling                                                                      |

@@ -14,6 +14,10 @@
  *   3. **Then reconcile.** Queue a resync for that member. Reconciliation is idempotent
  *      and computes the whole correct state, so a manual change that contradicts a
  *      mapping gets corrected on the next pass rather than being propagated.
+ *
+ * Rosters hang off the same event, and are evaluated independently: a role can confer a
+ * roster rank without being mapped or managed, so "no mapping cares about this role" must
+ * not be allowed to skip the roster. Both answers are reported in the result.
  */
 import { getPrisma, notDeleted } from '@frm/database';
 import { createLogger, serializeError } from '@frm/logging';
@@ -21,15 +25,17 @@ import {
   ActionSource,
   AuditAction,
   IssueSeverity,
+  RosterMembershipStatus,
   SyncActionType,
   SyncIssueType,
   SyncJobType,
 } from '@frm/shared';
-import { claimSyncMarker } from '@frm/queue';
+import { claimNicknameMarker, claimSyncMarker } from '@frm/queue';
 import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
 import { createSyncJob, enqueueSyncJob } from './sync-service.js';
 import { findApprovedGuildBySnowflake } from './resolve.js';
+import { queueRosterSync } from './roster-service.js';
 import { notifyGlobalAdmins } from './notify.js';
 
 const log = createLogger('core.events');
@@ -102,10 +108,25 @@ export async function handleMemberRoleChange({
     return { queued: false, reason: 'all changes were system generated', systemChanges };
   }
 
-  // Step 2: is any changed role relevant to the platform?
+  // Step 2a: rosters. Evaluated before the mapping check returns, because a rank role is
+  // frequently neither managed nor mapped - it exists only to say who is a Senior Admin.
+  const rosterResult = await queueRosterSyncForRoles({
+    prisma,
+    guild,
+    discordUserId,
+    roleIds: changedRoleIds,
+    executorDiscordId,
+  });
+
+  // Step 2b: is any changed role relevant to role synchronization?
   const relevant = await filterRelevantRoles(prisma, guild.id, changedRoleIds);
   if (relevant.length === 0) {
-    return { queued: false, reason: 'no managed or mapped roles were affected', systemChanges };
+    return {
+      queued: false,
+      reason: 'no managed or mapped roles were affected',
+      systemChanges,
+      ...rosterResult,
+    };
   }
 
   // Step 3: reconcile the member.
@@ -162,7 +183,137 @@ export async function handleMemberRoleChange({
 
   await enqueueSyncJob(job, { prisma });
 
-  return { queued: true, reason: 'reconciliation queued', jobId: job.id, systemChanges };
+  return {
+    queued: true,
+    reason: 'reconciliation queued',
+    jobId: job.id,
+    systemChanges,
+    ...rosterResult,
+  };
+}
+
+/**
+ * Queues a roster reconciliation when a changed role is bound to a rank.
+ *
+ * One job per affected roster, and only for rosters whose ranks actually reference one of
+ * the changed roles - a member gaining an unrelated colour role must not set the whole
+ * roster machinery going.
+ *
+ * @returns {Promise<{rosterQueued: boolean, rosterJobIds: string[]}>}
+ */
+async function queueRosterSyncForRoles({
+  prisma,
+  guild,
+  discordUserId,
+  roleIds,
+  executorDiscordId,
+}) {
+  const ranks = await prisma.rosterRank.findMany({
+    where: {
+      ...notDeleted,
+      discordRoleId: { in: roleIds },
+      roster: { ...notDeleted, approvedGuildId: guild.id },
+    },
+    select: { rosterId: true, roster: { select: { id: true, slug: true, approvedGuildId: true } } },
+  });
+
+  if (ranks.length === 0) return { rosterQueued: false, rosterJobIds: [] };
+
+  const rosters = new Map(ranks.map((rank) => [rank.rosterId, rank.roster]));
+  const ctx = systemContext({ label: 'discord-event' });
+  const ctxWithActor = {
+    ...ctx,
+    actor: { ...ctx.actor, discordUserId: executorDiscordId },
+    source: ActionSource.DISCORD,
+  };
+
+  const jobIds = [];
+  for (const roster of rosters.values()) {
+    const job = await queueRosterSync(ctxWithActor, {
+      roster,
+      discordUserId,
+      reason: 'Discord role change affecting a roster rank',
+      prisma,
+    }).catch((error) => {
+      log.error({ err: serializeError(error), slug: roster.slug }, 'could not queue roster sync');
+      return null;
+    });
+    if (job) jobIds.push(job.id);
+  }
+
+  return { rosterQueued: jobIds.length > 0, rosterJobIds: jobIds };
+}
+
+/**
+ * A member's nickname changed.
+ *
+ * The platform owns the nickname of anybody on a roster with nickname synchronization on,
+ * so an edit by hand is drift and gets corrected - otherwise the format is advisory and a
+ * staff member can quietly drop their rank from their name.
+ *
+ * The marker is what makes this safe. Every nickname the worker writes leaves one behind,
+ * and claiming it here identifies the event as our own echo. Without that, the bot's own
+ * rewrite would look like a hand edit and it would rewrite its rewrite, forever.
+ *
+ * @param {object} params
+ * @param {string} params.discordGuildId
+ * @param {string} params.discordUserId
+ * @param {string|null} [params.nickname] the new nickname
+ * @param {import('@prisma/client').PrismaClient} [params.prisma]
+ */
+export async function handleMemberNicknameChange({
+  discordGuildId,
+  discordUserId,
+  nickname = null,
+  prisma = getPrisma(),
+}) {
+  const guild = await findApprovedGuildBySnowflake(discordGuildId, prisma);
+  if (!guild || !guild.enabled || !guild.syncEnabled) {
+    return { queued: false, reason: 'guild is not approved or synchronization is disabled' };
+  }
+
+  const marker = await claimNicknameMarker({ discordGuildId, discordUserId }).catch((error) => {
+    // Fail safe, exactly as the role path does: treating our own write as a human edit
+    // would start a rename loop, and the scheduled sweep repairs any drift we ignore.
+    log.error({ err: serializeError(error) }, 'nickname marker lookup failed; ignoring');
+    return { failedLookup: true };
+  });
+  if (marker) {
+    return { queued: false, reason: 'nickname was written by the platform' };
+  }
+
+  // Only rosters that own nicknames, and only for somebody actually on one.
+  const memberships = await prisma.rosterMembership.findMany({
+    where: {
+      discordUserId,
+      status: RosterMembershipStatus.ACTIVE,
+      roster: { ...notDeleted, approvedGuildId: guild.id, nicknameSyncEnabled: true },
+    },
+    select: { roster: { select: { id: true, slug: true, approvedGuildId: true } } },
+  });
+
+  if (memberships.length === 0) {
+    return { queued: false, reason: 'member is not on a nickname-synchronized roster' };
+  }
+
+  const ctx = { ...systemContext({ label: 'discord-event' }), source: ActionSource.DISCORD };
+  const jobIds = [];
+
+  for (const { roster } of memberships) {
+    const job = await queueRosterSync(ctx, {
+      roster,
+      discordUserId,
+      reason: 'Nickname edited outside the platform',
+      prisma,
+    }).catch((error) => {
+      log.error({ err: serializeError(error), slug: roster.slug }, 'could not queue roster sync');
+      return null;
+    });
+    if (job) jobIds.push(job.id);
+  }
+
+  log.debug({ discordUserId, nickname, jobs: jobIds.length }, 'nickname drift queued');
+  return { queued: jobIds.length > 0, reason: 'nickname reconciliation queued', jobIds };
 }
 
 /**

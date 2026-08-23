@@ -57,7 +57,7 @@ This is an existing, working monorepo (`florida-roleplay-manager`). Build the ro
   (`packages/discord/src/mock-gateway.js`) and helpers in `tests/helpers`. `npm run check`
   runs lint + tests and must pass.
 - Read `README.md` and `docs/architecture.md` before writing code, and follow the existing
-  file/comment style — the codebase explains *why*, not *what*.
+  file/comment style — the codebase explains _why_, not _what_.
 
 ## Before you write code
 
@@ -83,6 +83,7 @@ and callsign source you'll want up front.
 ## Requirements
 
 ### Data model
+
 - A roster (name, slug, which guild, display order, whether it's published to the site).
 - A rank: belongs to a roster, bound to a **Discord role ID**, with a display label, a short
   label for the nickname, and a sort position that decides precedence.
@@ -92,12 +93,14 @@ and callsign source you'll want up front.
   than inventing parallel ones.
 
 ### Rank resolution
+
 - A member may hold several bound roles at once. **Highest sort position wins** — that's their
   rank; deterministic, no "first match" ordering by accident.
 - Zero bound roles → not on the roster.
 - Resolution is a pure function over (member's role IDs, rank config). Unit-test it.
 
 ### Nickname rendering
+
 - Render `Callsign | Rank | Name`, degrading sensibly when a part is missing.
 - **Rendering must be idempotent and parseable.** Re-running on an already-formatted nickname
   must produce the same string, never `165 | Jr. Admin | 165 | Mod | Mike`. Write the parser and
@@ -109,6 +112,7 @@ and callsign source you'll want up front.
   recorded sync issue, not a crash and not a silent no-op.
 
 ### Events and jobs
+
 - Extend the role-change path in `packages/core/src/event-service.js` so a relevant role change
   also enqueues roster work. A role change that touches no bound role must enqueue nothing.
 - Add a roster sync job type (`SyncJobType` in `packages/shared`, the queue name map and
@@ -120,13 +124,16 @@ and callsign source you'll want up front.
   already exist — reuse them, don't re-implement.
 
 ### Reconciliation
+
 - Desired roster state is computed from Discord roles, exactly like the role engine:
   desired − actual = changes. Idempotent, safe to run repeatedly.
 - Add a scheduled roster sweep so drift (changes made while the bot was down) self-heals, and a
   `dry-run` mode consistent with `SYNC_DRY_RUN_DEFAULT`.
 
 ### Slash commands (`apps/bot/src/commands/`)
+
 A `/roster` command group, matching the style of the existing `/mapping` and `/access` commands:
+
 - configure a roster and bind role → rank
 - view a roster in Discord
 - set/clear a member's callsign and preferred name
@@ -136,6 +143,7 @@ Guard every subcommand through the existing capability + access-tier system; add
 to the catalogue in `packages/shared` rather than reusing an unrelated one.
 
 ### API for the website
+
 - `GET /api/rosters` and `GET /api/rosters/:slug` returning ranks in order, each with its members
   (callsign, rank, name, Discord id, avatar-ish fields as needed).
 - Stable, documented JSON shape — the website is going to hard-code against it.
@@ -143,10 +151,12 @@ to the catalogue in `packages/shared` rather than reusing an unrelated one.
   in `apps/api/src/routes/resources.js` and `packages/validation`.
 
 ### Audit + observability
+
 Every roster add, removal, rank change, callsign change and nickname write goes to the audit log
 with actor, before/after and correlation id — same as every other action in this system.
 
 ### Tests
+
 - Unit: rank precedence, nickname render/parse round-trip, truncation, "no bound roles" cases.
 - Integration: role added → roster membership created + nickname written (mock gateway);
   promotion → rank moves and nickname updates; **all staff roles stripped → removed from roster
@@ -154,6 +164,7 @@ with actor, before/after and correlation id — same as every other action in th
   trigger another sync.
 
 ### Docs / setup
+
 - Update `README.md`, `docs/discord-setup.md` (the bot now needs **Manage Nicknames**, and its
   role must sit **above** every staff role it renames), `docs/environment.md` and `.env.example`
   for any new settings.

@@ -76,6 +76,8 @@ enum SyncJobType {
   GRANT_CHANGE
   SCHEDULED_RECONCILIATION
   MAPPING_VALIDATION
+  ROSTER_MEMBER_SYNC
+  ROSTER_SYNC
 }
 
 enum SyncJobStatus {
@@ -121,6 +123,7 @@ enum SyncIssueType {
   MAPPING_CONFLICT
   THRESHOLD_EXCEEDED
   ENQUEUE_FAILED
+  MEMBER_ABOVE_BOT
   UNKNOWN
 }
 
@@ -144,6 +147,13 @@ enum PendingApprovalType {
   GUILD_REGISTRATION
   GUILD_REMOVAL
   GLOBAL_RESYNC
+}
+
+/// Whether somebody currently appears on a roster. Departures are kept rather than
+/// deleted: "who was Senior Admin last March" is a question that gets asked.
+enum RosterMembershipStatus {
+  ACTIVE
+  DEPARTED
 }
 
 enum PendingApprovalStatus {
@@ -197,6 +207,8 @@ model User {
   systemSettings      SystemSetting[]        @relation("SettingUpdater")
   createdGrantRules   RoleGrantRule[]        @relation("RoleGrantRuleCreator")
   createdAccessTiers  RoleAccessTier[]       @relation("AccessTierCreator")
+  createdRosters      Roster[]               @relation("RosterCreator")
+  rosterMemberships   RosterMembership[]     @relation("RosterMember")
 
   @@index([status])
   @@index([deletedAt])
@@ -259,6 +271,7 @@ model ApprovedGuild {
   syncActions    SyncAction[]
   syncIssues     SyncIssue[]
   auditLogs      AuditLog[]
+  rosters        Roster[]
 
   @@index([enabled])
   @@index([type])
@@ -412,6 +425,112 @@ model RoleAccessTier {
 
   @@index([deletedAt])
   @@map("role_access_tiers")
+}
+
+// ---------------------------------------------------------------------------
+// Rosters
+// ---------------------------------------------------------------------------
+
+/// A published staff roster: the staff team, or one department's chain of command.
+///
+/// A roster belongs to exactly one guild, because that is the guild whose roles decide
+/// who is on it and whose nicknames get rewritten. A community with one staff roster and
+/// a roster per department models each as its own row; nothing else has to change.
+model Roster {
+  id              String   @id @default(uuid()) @db.Uuid
+  /// URL-safe identifier the website addresses this roster by. Stable across renames.
+  slug            String   @unique
+  name            String
+  description     String?
+  approvedGuildId String   @db.Uuid
+  /// Whether the public API serves this roster. A roster can be configured and
+  /// reconciled for a while before anybody outside Discord sees it.
+  published       Boolean  @default(true)
+  /// Ordering on the website, and the tie-break when a member sits on two rosters in
+  /// one guild: the lowest position owns their nickname.
+  position        Int      @default(0)
+  /// Whether membership of this roster rewrites Discord nicknames.
+  nicknameSyncEnabled Boolean @default(true)
+  createdById     String?   @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  guild       ApprovedGuild      @relation(fields: [approvedGuildId], references: [id], onDelete: Cascade)
+  createdBy   User?              @relation("RosterCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  ranks       RosterRank[]
+  memberships RosterMembership[]
+
+  @@index([approvedGuildId])
+  @@index([deletedAt])
+  @@map("rosters")
+}
+
+/// One rank on a roster, bound to the Discord role that confers it.
+///
+/// The binding is what makes Discord the source of truth: holding the role *is* being
+/// that rank. Nothing grants a rank directly.
+model RosterRank {
+  id            String @id @default(uuid()) @db.Uuid
+  rosterId      String @db.Uuid
+  /// The role in the roster's guild that confers this rank.
+  discordRoleId String
+  name          String
+  /// The abbreviated form used in nicknames, e.g. "Jr. Admin". Falls back to `name`.
+  shortName     String?
+  /// Seniority. Highest wins when a member holds several bound roles, and orders the
+  /// roster on the website.
+  position      Int
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  roster      Roster             @relation(fields: [rosterId], references: [id], onDelete: Cascade)
+  memberships RosterMembership[]
+
+  @@unique([rosterId, discordRoleId])
+  @@index([rosterId, position])
+  @@map("roster_ranks")
+}
+
+/// Somebody's place on a roster.
+///
+/// Keyed by Discord id rather than platform user, because a staff member appears on the
+/// roster whether or not they have ever signed in to the website. `userId` is filled in
+/// when an identity exists so the record joins up with the rest of the platform.
+model RosterMembership {
+  id            String                  @id @default(uuid()) @db.Uuid
+  rosterId      String                  @db.Uuid
+  discordUserId String
+  userId        String?                 @db.Uuid
+  rankId        String?                 @db.Uuid
+  /// In-game callsign shown before the rank, e.g. "165". Set by a human; never derived.
+  callsign      String?
+  /// An explicit override set by an administrator. Null unless somebody has set one,
+  /// which is what makes it authoritative: when it is present the member cannot rename
+  /// themselves out of it, and when it is absent their own nickname decides.
+  preferredName String?
+  /// The name segment last resolved for this member - from their override, their
+  /// nickname, or their username. Derived, never authoritative; the website reads it so
+  /// a roster page does not have to re-derive names for everybody on every request.
+  displayName   String?
+  status        RosterMembershipStatus  @default(ACTIVE)
+  /// The last nickname the platform wrote, so an externally changed nickname can be
+  /// told apart from one that is simply out of date.
+  managedNickname String?
+  joinedAt      DateTime                @default(now())
+  departedAt    DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  roster Roster      @relation(fields: [rosterId], references: [id], onDelete: Cascade)
+  rank   RosterRank? @relation(fields: [rankId], references: [id], onDelete: SetNull)
+  user   User?       @relation("RosterMember", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([rosterId, discordUserId])
+  @@index([rosterId, status])
+  @@index([discordUserId])
+  @@map("roster_memberships")
 }
 
 // ---------------------------------------------------------------------------

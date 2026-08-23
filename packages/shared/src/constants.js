@@ -9,6 +9,7 @@ export const PAGINATION = Object.freeze({
 /** Redis key prefixes. Namespaced so a shared Redis instance stays legible. */
 export const REDIS_PREFIX = Object.freeze({
   SYNC_MARKER: 'frm:syncmarker',
+  NICKNAME_MARKER: 'frm:nickmarker',
   MEMBER_LOCK: 'frm:lock:member',
   JOB_LOCK: 'frm:lock:job',
   SESSION: 'frm:session',
@@ -22,6 +23,7 @@ export const QUEUE_NAMES = Object.freeze({
   SYNC: 'frm-sync',
   ROLE_ACTION: 'frm-role-action',
   MAINTENANCE: 'frm-maintenance',
+  ROSTER: 'frm-roster',
 });
 
 /**

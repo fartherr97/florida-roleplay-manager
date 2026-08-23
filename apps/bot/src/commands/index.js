@@ -12,6 +12,7 @@ import * as member from './member.js';
 import * as permissions from './permissions.js';
 import * as resync from './resync.js';
 import * as role from './role.js';
+import * as roster from './roster.js';
 import * as rolemanager from './rolemanager.js';
 import * as setup from './setup.js';
 import * as system from './system.js';
@@ -26,6 +27,7 @@ const MODULES = [
   resync,
   role,
   rolemanager,
+  roster,
   setup,
   system,
 ];

@@ -13,12 +13,16 @@
 import {
   auditForMapping,
   auditForMember,
+  bindRosterRank,
   cancelSyncJob,
   createMapping,
+  createRoster,
   deleteMapping,
+  deleteRoster,
   exportAuditLogs,
   getGuildStatus,
   getMapping,
+  getRoster,
   getSyncJob,
   getSystemHealth,
   grantPermission,
@@ -30,6 +34,7 @@ import {
   listMappings,
   listMembers,
   listPermissions,
+  listRosters,
   listSyncIssues,
   listSyncJobs,
   lookupMember,
@@ -45,9 +50,13 @@ import {
   revokeGrant,
   revokePermission,
   setMappingEnabled,
+  setRosterMemberDetails,
+  syncRoster,
   testMapping,
+  unbindRosterRank,
   updateGuildSettings,
   updateMapping,
+  updateRoster,
   upsertManagedRole,
 } from '@frm/core';
 
@@ -168,6 +177,42 @@ export default async function resourceRoutes(fastify) {
   );
 
   // --- audit ---------------------------------------------------------------
+
+  // --- rosters -------------------------------------------------------------
+  // The public read model is served unauthenticated from `rosters.js`; these are the
+  // endpoints a signed-in administrator uses from the dashboard.
+
+  route(fastify, 'get', '/rosters/manage', (request) => listRosters(request.ctx, request.query));
+  route(fastify, 'post', '/rosters/manage', (request) => createRoster(request.ctx, request.body));
+  route(fastify, 'get', '/rosters/manage/:slug', (request) =>
+    getRoster(request.ctx, request.params.slug),
+  );
+  route(fastify, 'patch', '/rosters/manage/:slug', (request) =>
+    updateRoster(request.ctx, { ...request.body, slug: request.params.slug }),
+  );
+  route(fastify, 'delete', '/rosters/manage/:slug', (request) =>
+    deleteRoster(request.ctx, { ...request.query, slug: request.params.slug }),
+  );
+  route(fastify, 'post', '/rosters/manage/:slug/ranks', (request) =>
+    bindRosterRank(request.ctx, { ...request.body, slug: request.params.slug }),
+  );
+  route(fastify, 'delete', '/rosters/manage/:slug/ranks/:roleId', (request) =>
+    unbindRosterRank(request.ctx, {
+      ...request.query,
+      slug: request.params.slug,
+      discordRoleId: request.params.roleId,
+    }),
+  );
+  route(fastify, 'patch', '/rosters/manage/:slug/members/:discordUserId', (request) =>
+    setRosterMemberDetails(request.ctx, {
+      ...request.body,
+      slug: request.params.slug,
+      discordUserId: request.params.discordUserId,
+    }),
+  );
+  route(fastify, 'post', '/rosters/manage/:slug/sync', (request) =>
+    syncRoster(request.ctx, { ...request.body, slug: request.params.slug }),
+  );
 
   route(fastify, 'get', '/audit', (request) => queryAuditLogs(request.ctx, request.query));
   route(fastify, 'get', '/audit/export', (request) => exportAuditLogs(request.ctx, request.query));

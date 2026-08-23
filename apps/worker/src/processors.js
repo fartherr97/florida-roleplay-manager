@@ -7,7 +7,9 @@
 import { createLogger, serializeError } from '@frm/logging';
 import {
   runMappingValidation,
+  runRosterJob,
   runScheduledReconciliation,
+  runScheduledRosterSweep,
   runSyncJob,
   validateManagedRoles,
 } from '@frm/core';
@@ -82,12 +84,45 @@ export function createMaintenanceProcessor({ gateway }) {
 
       case JobName.SCHEDULED_RECONCILIATION: {
         const result = await runScheduledReconciliation({ gateway, prisma });
+        // Roster drift is repaired on the same cadence as role drift, and for the same
+        // reason: events can be missed while the bot is restarting.
+        await runScheduledRosterSweep({ prisma }).catch((error) => {
+          log.error({ err: serializeError(error) }, 'scheduled roster sweep failed');
+        });
         return { syncJobId: result?.id, status: result?.status };
       }
 
       default:
         log.warn({ name: job.name }, 'unknown maintenance job');
         return { skipped: true };
+    }
+  };
+}
+
+/**
+ * Builds the processor for the roster queue.
+ *
+ * Separate from the sync processor so roster work and role work cannot starve each
+ * other: a guild-wide roster rebuild queues behind other roster jobs, not in front of
+ * the role synchronization somebody is waiting on.
+ */
+export function createRosterProcessor({ gateway }) {
+  return async function processRosterJob(job) {
+    const { syncJobId } = job.data;
+
+    log.info({ jobId: job.id, name: job.name, syncJobId }, 'processing roster job');
+
+    try {
+      const result = await runRosterJob({ jobId: syncJobId, gateway, prisma: getPrisma() });
+      return { status: result?.status, syncJobId, applied: result?.applied ?? 0 };
+    } catch (error) {
+      // Same rule as role synchronization: a permanent failure is not worth five
+      // attempts. Missing Manage Nicknames will still be missing in eight seconds.
+      if (error?.retryable !== true) {
+        log.error({ err: serializeError(error), syncJobId }, 'permanent roster failure');
+        await job.discard();
+      }
+      throw error;
     }
   };
 }

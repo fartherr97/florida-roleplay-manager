@@ -28,6 +28,8 @@ export const JobName = Object.freeze({
   ROLE_ACTION_RETRY: 'role-action-retry',
   SCHEDULED_RECONCILIATION: 'scheduled-reconciliation',
   MAPPING_VALIDATION: 'mapping-validation',
+  ROSTER_MEMBER_SYNC: 'roster-member-sync',
+  ROSTER_SYNC: 'roster-sync',
 });
 
 /** Which queue each job name belongs to. */
@@ -40,6 +42,10 @@ const QUEUE_FOR_JOB = Object.freeze({
   [JobName.ROLE_ACTION_RETRY]: QUEUE_NAMES.ROLE_ACTION,
   [JobName.SCHEDULED_RECONCILIATION]: QUEUE_NAMES.MAINTENANCE,
   [JobName.MAPPING_VALIDATION]: QUEUE_NAMES.MAINTENANCE,
+  // Roster work gets its own queue rather than sharing the sync queue: a roster bug
+  // then cannot starve or stall role synchronization, and vice versa.
+  [JobName.ROSTER_MEMBER_SYNC]: QUEUE_NAMES.ROSTER,
+  [JobName.ROSTER_SYNC]: QUEUE_NAMES.ROSTER,
 });
 
 /** Maps a SyncJobType onto the job name that processes it. */
@@ -53,6 +59,8 @@ export const JOB_NAME_FOR_TYPE = Object.freeze({
   [SyncJobType.ROLE_REMOVE]: JobName.ROLE_ACTION_RETRY,
   [SyncJobType.SCHEDULED_RECONCILIATION]: JobName.SCHEDULED_RECONCILIATION,
   [SyncJobType.MAPPING_VALIDATION]: JobName.MAPPING_VALIDATION,
+  [SyncJobType.ROSTER_MEMBER_SYNC]: JobName.ROSTER_MEMBER_SYNC,
+  [SyncJobType.ROSTER_SYNC]: JobName.ROSTER_SYNC,
 });
 
 /** @type {Map<string, Queue>} */
@@ -88,6 +96,7 @@ export function getQueue(name) {
 export const getSyncQueue = () => getQueue(QUEUE_NAMES.SYNC);
 export const getRoleActionQueue = () => getQueue(QUEUE_NAMES.ROLE_ACTION);
 export const getMaintenanceQueue = () => getQueue(QUEUE_NAMES.MAINTENANCE);
+export const getRosterQueue = () => getQueue(QUEUE_NAMES.ROSTER);
 
 /**
  * Enqueues a job.

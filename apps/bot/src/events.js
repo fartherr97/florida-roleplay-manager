@@ -12,6 +12,7 @@ import {
   handleGuildRemoved,
   handleMemberJoin,
   handleMemberLeave,
+  handleMemberNicknameChange,
   handleMemberRoleChange,
   handleRoleDeleted,
   handleRoleUpdated,
@@ -100,6 +101,19 @@ export function registerEventHandlers(client, { gateway, env }) {
       const removedRoleIds = [...before].filter(
         (id) => !after.has(id) && id !== newMember.guild.id,
       );
+
+      // One event can carry both a role change and a rename, and they are handled
+      // separately: a promotion is reconciled from roles, while a bare rename is drift
+      // in a nickname the platform owns.
+      if (oldMember.nickname !== newMember.nickname) {
+        await handleMemberNicknameChange({
+          discordGuildId: newMember.guild.id,
+          discordUserId: newMember.id,
+          nickname: newMember.nickname ?? null,
+        }).catch((error) => {
+          log.error({ err: serializeError(error) }, 'nickname change handling failed');
+        });
+      }
 
       if (addedRoleIds.length === 0 && removedRoleIds.length === 0) return;
 

@@ -36,6 +36,17 @@ export function roleChangeKey({ discordGuildId, discordUserId, discordRoleId, ac
 }
 
 /**
+ * Key for a nickname change. Unlike a role change there is no third component: a member
+ * has exactly one nickname per guild, so guild plus user identifies the write.
+ *
+ * @param {{discordGuildId: string, discordUserId: string}} parts
+ * @returns {string}
+ */
+export function nicknameChangeKey({ discordGuildId, discordUserId }) {
+  return `${discordGuildId}:${discordUserId}:NICKNAME`;
+}
+
+/**
  * Strips a Discord mention wrapper (`<@123>`, `<@!123>`, `<@&123>`) leaving the raw id.
  * Slash-command string options frequently arrive in mention form when copy-pasted.
  *

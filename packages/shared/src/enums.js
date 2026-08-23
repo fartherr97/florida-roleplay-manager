@@ -92,6 +92,8 @@ export const SyncJobType = Object.freeze({
   GRANT_CHANGE: 'GRANT_CHANGE',
   SCHEDULED_RECONCILIATION: 'SCHEDULED_RECONCILIATION',
   MAPPING_VALIDATION: 'MAPPING_VALIDATION',
+  ROSTER_MEMBER_SYNC: 'ROSTER_MEMBER_SYNC',
+  ROSTER_SYNC: 'ROSTER_SYNC',
 });
 
 /**
@@ -154,7 +156,15 @@ export const SyncIssueType = Object.freeze({
   MAPPING_CONFLICT: 'MAPPING_CONFLICT',
   THRESHOLD_EXCEEDED: 'THRESHOLD_EXCEEDED',
   ENQUEUE_FAILED: 'ENQUEUE_FAILED',
+  /// The bot cannot rename this member: they own the server, or they outrank the bot.
+  MEMBER_ABOVE_BOT: 'MEMBER_ABOVE_BOT',
   UNKNOWN: 'UNKNOWN',
+});
+
+/** @readonly */
+export const RosterMembershipStatus = Object.freeze({
+  ACTIVE: 'ACTIVE',
+  DEPARTED: 'DEPARTED',
 });
 
 /** @readonly */
@@ -251,6 +261,17 @@ export const AuditAction = Object.freeze({
   AUTH_LOGIN: 'auth.login',
   AUTH_LOGOUT: 'auth.logout',
   AUTH_DENIED: 'auth.denied',
+
+  ROSTER_CREATED: 'roster.created',
+  ROSTER_UPDATED: 'roster.updated',
+  ROSTER_DELETED: 'roster.deleted',
+  ROSTER_RANK_BOUND: 'roster.rank_bound',
+  ROSTER_RANK_UNBOUND: 'roster.rank_unbound',
+  ROSTER_MEMBER_ADDED: 'roster.member_added',
+  ROSTER_MEMBER_RANK_CHANGED: 'roster.member_rank_changed',
+  ROSTER_MEMBER_REMOVED: 'roster.member_removed',
+  ROSTER_MEMBER_UPDATED: 'roster.member_updated',
+  ROSTER_NICKNAME_SET: 'roster.nickname_set',
 
   SYSTEM_SETTING_UPDATED: 'system.setting_updated',
 });

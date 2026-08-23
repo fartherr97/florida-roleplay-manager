@@ -21,21 +21,26 @@ Under **Bot → Privileged Gateway Intents**, enable:
 
 The bot needs these permissions:
 
-| Permission          | Why                                                                                                                                                                                           |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Manage Roles**    | To add and remove roles. Without it every write fails with a permanent, non-retryable error.                                                                                                  |
-| **Manage Channels** | Only needed for `/setup department`, which creates the server's categories and channels. Role synchronization works without it; provisioning refuses to run until the bot has it.             |
-| **View Audit Log**  | Optional but recommended: it lets the bot attribute manual role changes to the person who made them in the audit trail. Everything works without it; the actor is simply recorded as unknown. |
+| Permission           | Why                                                                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Manage Roles**     | To add and remove roles. Without it every write fails with a permanent, non-retryable error.                                                                                                           |
+| **Manage Nicknames** | Only needed for rosters, which rewrite display names to `Callsign \| Rank \| Name`. Without it the roster itself still stays correct and every rename is recorded as a `BOT_MISSING_PERMISSION` issue. |
+| **Manage Channels**  | Only needed for `/setup department`, which creates the server's categories and channels. Role synchronization works without it; provisioning refuses to run until the bot has it.                      |
+| **View Audit Log**   | Optional but recommended: it lets the bot attribute manual role changes to the person who made them in the audit trail. Everything works without it; the actor is simply recorded as unknown.          |
 
-Permission integer: `268435456` (Manage Roles), `268435584` (with View Audit Log), or
-`268435600` (Manage Roles + Manage Channels + View Audit Log — needed for `/setup`).
+Permission integer: `268435456` (Manage Roles), `268435584` (with View Audit Log),
+`268435600` (Manage Roles + Manage Channels + View Audit Log — needed for `/setup`), or
+`402653328` (all of the above plus Manage Nicknames — needed for rosters).
+
+Adding a permission to an existing bot means re-inviting it with the new integer. The bot
+does not have to leave first, and re-inviting does not disturb its roles or its data.
 
 ## 4. Invite the bot
 
 ```
 https://discord.com/api/oauth2/authorize
   ?client_id=<DISCORD_CLIENT_ID>
-  &permissions=268435600
+  &permissions=402653328
   &scope=bot%20applications.commands
 ```
 
@@ -52,6 +57,13 @@ nothing".
 
 In **Server Settings → Roles**, drag the bot's role **above every role the platform will
 manage**, in every approved server.
+
+Rosters extend that rule to people rather than roles: Discord refuses to let a bot rename
+a member whose own highest role is at or above the bot's. So the bot's role must sit above
+every **rank** role too, or the senior ranks are exactly the ones whose nicknames never
+update. One member can never be renamed by anybody — the **server owner** — and that is a
+Discord rule no permission changes. The roster still lists them correctly; set their
+nickname by hand once and it stays.
 
 A good layout:
 

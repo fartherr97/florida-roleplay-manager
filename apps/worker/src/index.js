@@ -17,6 +17,7 @@ import { createGatewayFromEnv } from '@frm/discord';
 import {
   createMaintenanceProcessor,
   createRoleActionProcessor,
+  createRosterProcessor,
   createSyncProcessor,
 } from './processors.js';
 
@@ -45,6 +46,10 @@ async function main() {
       concurrency: env.WORKER_CONCURRENCY,
     }),
     new Worker(QUEUE_NAMES.ROLE_ACTION, createRoleActionProcessor({ gateway }), {
+      connection,
+      concurrency: Math.max(1, Math.floor(env.WORKER_CONCURRENCY / 2)),
+    }),
+    new Worker(QUEUE_NAMES.ROSTER, createRosterProcessor({ gateway }), {
       connection,
       concurrency: Math.max(1, Math.floor(env.WORKER_CONCURRENCY / 2)),
     }),

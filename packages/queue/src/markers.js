@@ -18,7 +18,7 @@
  *     concurrent events both claim the same marker. The Lua script below makes claiming
  *     a marker atomic, so exactly one event can ever consume it.
  */
-import { REDIS_PREFIX, getEnv, roleChangeKey } from '@frm/shared';
+import { REDIS_PREFIX, getEnv, nicknameChangeKey, roleChangeKey } from '@frm/shared';
 import { createLogger } from '@frm/logging';
 import { getRedis } from './connection.js';
 
@@ -152,4 +152,77 @@ export async function writeSyncMarkers(markers, redis = getRedis()) {
  */
 export async function discardSyncMarker(parts, redis = getRedis()) {
   await redis.del(markerKey(parts));
+}
+
+// ---------------------------------------------------------------------------
+// Nickname markers
+// ---------------------------------------------------------------------------
+//
+// Roster synchronization rewrites nicknames, and Discord reports a nickname change on
+// the same `guildMemberUpdate` event as a role change. The nickname handler restores the
+// managed format when somebody edits it by hand, so without a marker the bot's own write
+// would look like a hand edit and it would rewrite its own rewrite, forever.
+//
+// A separate key space from role markers, because the identity of a nickname change is
+// (guild, member) - there is no role in it, and reusing `roleChangeKey` would mean
+// inventing a fake role id.
+
+function nicknameMarkerKey({ discordGuildId, discordUserId }) {
+  return `${REDIS_PREFIX.NICKNAME_MARKER}:${nicknameChangeKey({
+    discordGuildId,
+    discordUserId,
+  })}`;
+}
+
+/**
+ * Records that the platform is about to rewrite a member's nickname. Call before the
+ * Discord write, for the same reason as {@link writeSyncMarker}.
+ *
+ * @param {object} marker
+ * @param {string} marker.discordGuildId
+ * @param {string} marker.discordUserId
+ * @param {string|null} [marker.nickname] the value being written, for diagnostics
+ * @param {string} [marker.syncJobId]
+ * @param {import('ioredis').Redis} [redis]
+ */
+export async function writeNicknameMarker(marker, redis = getRedis()) {
+  const ttl = getEnv().SYNC_MARKER_TTL_SECONDS;
+  const key = nicknameMarkerKey(marker);
+  await redis.set(
+    key,
+    JSON.stringify({
+      syncJobId: marker.syncJobId ?? null,
+      discordGuildId: marker.discordGuildId,
+      discordUserId: marker.discordUserId,
+      nickname: marker.nickname ?? null,
+      expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
+    }),
+    'EX',
+    ttl,
+  );
+  return key;
+}
+
+/**
+ * Claims the marker for an observed nickname change.
+ *
+ * @returns {Promise<object|null>} the marker when the platform wrote this nickname,
+ *   `null` when a human did.
+ */
+export async function claimNicknameMarker({ discordGuildId, discordUserId }, redis = getRedis()) {
+  const key = nicknameMarkerKey({ discordGuildId, discordUserId });
+  const raw = await redis.eval(CLAIM_SCRIPT, 1, key);
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    log.warn({ key }, 'malformed nickname marker discarded');
+    return null;
+  }
+}
+
+/** Drops a nickname marker whose Discord write failed. */
+export async function discardNicknameMarker(parts, redis = getRedis()) {
+  await redis.del(nicknameMarkerKey(parts));
 }

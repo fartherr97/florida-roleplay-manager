@@ -17,6 +17,7 @@ import sessionPlugin from './plugins/session.js';
 import authPlugin from './plugins/auth.js';
 import authRoutes from './routes/auth.js';
 import resourceRoutes from './routes/resources.js';
+import rosterRoutes from './routes/rosters.js';
 
 /**
  * @param {object} [options]
@@ -95,6 +96,9 @@ export async function buildApp(options = {}) {
   await fastify.register(
     async (instance) => {
       await instance.register(authRoutes);
+      // Public, and registered alongside the rest so it shares the /api prefix, CORS and
+      // rate limiting. Its handlers do not use `fastify.authenticated`.
+      await instance.register(rosterRoutes);
       await instance.register(resourceRoutes);
     },
     { prefix: '/api' },

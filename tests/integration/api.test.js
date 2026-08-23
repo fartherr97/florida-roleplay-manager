@@ -362,4 +362,96 @@ describe.skipIf(!available)('REST API', () => {
       expect(response.statusCode).toBe(400);
     });
   });
+
+  describe('public roster endpoints', () => {
+    /** A published roster with one ranked member, built directly. */
+    async function seedRoster({ published = true } = {}) {
+      const prisma = testPrisma();
+      const roster = await prisma.roster.create({
+        data: {
+          slug: 'staff',
+          name: 'Staff Team',
+          approvedGuildId: fixtures.guilds.mainGuild.id,
+          published,
+        },
+      });
+      const rank = await prisma.rosterRank.create({
+        data: {
+          rosterId: roster.id,
+          discordRoleId: '940000000000000001',
+          name: 'Senior Administrator',
+          shortName: 'Sr. Admin',
+          position: 30,
+        },
+      });
+      await prisma.rosterMembership.create({
+        data: {
+          rosterId: roster.id,
+          discordUserId: IDS.D_MEMBER,
+          userId: fixtures.users.member.id,
+          rankId: rank.id,
+          callsign: '165',
+          displayName: 'Mike',
+          managedNickname: '165 | Sr. Admin | Mike',
+        },
+      });
+      return roster;
+    }
+
+    it('serves a roster without a session, because a roster page is public', async () => {
+      await seedRoster();
+
+      const response = await app.inject({ method: 'GET', url: '/api/rosters/staff' });
+
+      expect(response.statusCode).toBe(200);
+      const { roster } = response.json();
+      expect(roster.ranks[0].members[0]).toMatchObject({ name: 'Mike', callsign: '165' });
+    });
+
+    it('exposes nothing beyond what the roster page shows', async () => {
+      await seedRoster();
+
+      const response = await app.inject({ method: 'GET', url: '/api/rosters/staff' });
+      const body = response.payload;
+
+      // The response is public, so internal identifiers must not travel with it - an
+      // unauthenticated caller learning platform user ids would be a real leak.
+      expect(body).not.toContain(fixtures.users.member.id);
+      expect(body).not.toContain('managedNickname');
+      expect(body).not.toContain('userId');
+    });
+
+    it('does not serve an unpublished roster', async () => {
+      await seedRoster({ published: false });
+
+      const response = await app.inject({ method: 'GET', url: '/api/rosters/staff' });
+      expect(response.statusCode).toBe(404);
+
+      const list = await app.inject({ method: 'GET', url: '/api/rosters' });
+      expect(list.json().rosters).toEqual([]);
+    });
+
+    it('answers 304 when the caller already has the current roster', async () => {
+      await seedRoster();
+
+      const first = await app.inject({ method: 'GET', url: '/api/rosters' });
+      const etag = first.headers.etag;
+      expect(etag).toBeTruthy();
+      expect(first.headers['cache-control']).toContain('max-age=');
+
+      const second = await app.inject({
+        method: 'GET',
+        url: '/api/rosters',
+        headers: { 'if-none-match': etag },
+      });
+      expect(second.statusCode).toBe(304);
+    });
+
+    it('still requires a session for the management endpoints', async () => {
+      await seedRoster();
+
+      const response = await app.inject({ method: 'GET', url: '/api/rosters/manage' });
+      expect(response.statusCode).toBe(401);
+    });
+  });
 });

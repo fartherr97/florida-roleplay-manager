@@ -28,6 +28,11 @@ a member's role list is left strictly alone.
   (Supervisor → Admin); holding the role unlocks every bot command up to that tier, resolved
   live from the member's roles — so a community runs bot access off its existing staff roles
   instead of granting each person by hand. Losing the role loses the access immediately.
+- **Website rosters driven by Discord roles.** `/roster` binds a Discord role to a rank on
+  a published roster: holding the role _is_ being that rank. A promotion moves the member
+  up the roster and rewrites their display name to `165 | Sr. Admin | Mike`; losing every
+  rank role takes them off the roster and gives them their plain name back. The website
+  reads it from a public, cached JSON endpoint - the bot never touches the site.
 - **A reconciliation engine.** Desired state − actual state = required changes.
   Deterministic, idempotent, and it never removes a role whose correct value it cannot
   compute.
@@ -63,11 +68,11 @@ Discord slash commands ─┘                │
 
 Three processes, one shared brain:
 
-| Process       | Responsibility                                                                          |
-| ------------- | --------------------------------------------------------------------------------------- |
-| `apps/bot`    | Discord events and slash commands. Observes and commands; never writes roles itself.    |
-| `apps/api`    | Authenticated HTTP for the future dashboard. Never holds the bot token.                 |
-| `apps/worker` | The only process that writes roles to Discord. Runs the queue and the scheduled sweeps. |
+| Process       | Responsibility                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------------- |
+| `apps/bot`    | Discord events and slash commands. Observes and commands; never writes roles itself.                  |
+| `apps/api`    | Authenticated HTTP for the future dashboard. Never holds the bot token.                               |
+| `apps/worker` | The only process that writes roles and nicknames to Discord. Runs the queue and the scheduled sweeps. |
 
 All three are thin adapters over `packages/core`, which holds every authorization
 decision, database write and role calculation. That is what stops the website and the bot
@@ -122,6 +127,7 @@ Discord application setup and required permissions:
 /mapping      create · list · view · edit · test · enable · disable · remove
               approvals · approve · reject
 /role         manage · list · unmanage · grant · revoke · grants
+/roster       create · rank · unrank · member · sync · view · list · publish
 /resync       member · guild · all · preview · status
 /member       lookup · link · unlink
 /audit        member · mapping · recent · failures · retry
@@ -140,6 +146,12 @@ what is missing, so they double as repair commands. Provisioned roles carry **no
 permissions of their own — access is decided entirely by the per-channel overwrites — and
 `/setup permissions` blanks every existing role and gives `@everyone` the basics, so an
 already-built server can be moved onto that model in one command.
+
+`/roster` is configuration only. Nobody is added to a roster by hand: `/roster rank` binds a
+Discord role to a rank, and from then on the roles decide. What the platform cannot work out
+for itself — a member's callsign, and a name override where their own is not what the roster
+should show — is set with `/roster member`. `/roster sync` brings existing staff in when a
+roster is first configured, and takes `dry_run` to preview it.
 
 Anything destructive or large asks for confirmation first, and guild/global resyncs show a
 real preview — computed by the same planner that will do the work — before anything is
@@ -173,6 +185,8 @@ Coverage of the specification's required cases lives in `tests/`:
 | Unmanaged role preservation                    | `tests/unit/reconciliation.test.js`, `tests/integration/sync-runner.test.js`          |
 | Discord hierarchy failures                     | `tests/unit/preflight.test.js`, `tests/integration/sync-runner.test.js`               |
 | Job retry behaviour                            | `tests/unit/worker-retry.test.js`                                                     |
+| Roster rank resolution and nickname rendering  | `tests/unit/roster-nickname.test.js`, `tests/unit/roster-planning.test.js`            |
+| Roster promotion, removal and nickname loops   | `tests/integration/roster-sync.test.js`                                               |
 | Audit log creation                             | `tests/integration/services.test.js`, `tests/integration/sync-runner.test.js`         |
 
 ## Documentation
@@ -180,6 +194,7 @@ Coverage of the specification's required cases lives in `tests/`:
 - [Architecture](docs/architecture.md) — how the pieces fit, and the rules that hold
 - [Implementation plan and risk analysis](docs/implementation-plan.md)
 - [Local development](docs/development.md)
+- [Rosters](docs/rosters.md) — how Discord roles drive the website rosters, and the API the site reads
 - [Discord application setup](docs/discord-setup.md)
 - [Environment variables](docs/environment.md)
 - [Database and migrations](docs/database.md)
