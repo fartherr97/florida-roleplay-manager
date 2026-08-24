@@ -55,6 +55,7 @@ An empty value means "not configured", not "configured as an empty string".
 | `SESSION_TTL_SECONDS`  | `86400`    |                                                                                                                           |
 | `COOKIE_SECURE`        | `false`    | **Must be true in production** — startup fails otherwise                                                                  |
 | `CORS_ALLOWED_ORIGINS` | empty      | Explicit origin allowlist; wildcards cannot be used with cookies                                                          |
+| `API_PORT`             | `4000`     | Falls back to `PORT` when unset, which is how Railway, Render, Heroku and Fly assign it                                   |
 | `API_TRUST_PROXY`      | `false`    | Only enable behind a trusted reverse proxy — it makes `X-Forwarded-For` authoritative for rate limiting and audit records |
 | `RATE_LIMIT_MAX`       | `120`      | Requests per window, keyed on session then IP                                                                             |
 | `RATE_LIMIT_WINDOW`    | `1 minute` |                                                                                                                           |

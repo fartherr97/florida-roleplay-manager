@@ -201,6 +201,7 @@ Coverage of the specification's required cases lives in `tests/`:
 - [Environment variables](docs/environment.md)
 - [Database and migrations](docs/database.md)
 - [Production deployment](docs/deployment.md)
+- [Deploying to Railway](docs/railway.md) — a step-by-step walkthrough
 - [Security considerations](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Backup and recovery](docs/backup-recovery.md)

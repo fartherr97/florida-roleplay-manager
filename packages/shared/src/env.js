@@ -157,6 +157,14 @@ export function parseEnv({ service = 'script', source = process.env } = {}) {
     ]),
   );
 
+  // Platform-as-a-service hosts (Railway, Render, Heroku, Fly) assign the port at
+  // runtime and pass it as `PORT`. Binding to anything else means the health check
+  // never succeeds and the deployment is rolled back with no useful error, so `PORT`
+  // is honoured when `API_PORT` was not set explicitly.
+  if (sanitized.API_PORT === undefined && sanitized.PORT !== undefined) {
+    sanitized.API_PORT = sanitized.PORT;
+  }
+
   const result = envSchema.safeParse(sanitized);
   if (!result.success) {
     const issues = result.error.issues
