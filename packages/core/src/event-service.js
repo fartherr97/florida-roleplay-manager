@@ -130,12 +130,21 @@ export async function handleMemberRoleChange({
 
   // Step 2b: rosters. Evaluated before the mapping check returns, because a rank role is
   // frequently neither managed nor mapped - it exists only to say who is a Senior Admin.
+  //
+  // Isolated deliberately. Rosters are a secondary concern layered onto an event that
+  // role synchronization already depended on, and they must never be able to break it:
+  // a roster failure here - a migration that has not landed yet on a rolling deploy, a
+  // query that errors - degrades to "no roster work queued" and is repaired by the
+  // scheduled sweep, rather than taking the whole role change down with it.
   const rosterResult = await queueRosterSyncForRoles({
     prisma,
     guild,
     discordUserId,
     roleIds: changedRoleIds,
     executorDiscordId,
+  }).catch((error) => {
+    log.error({ err: serializeError(error) }, 'roster evaluation failed; continuing');
+    return { rosterQueued: false, rosterJobIds: [] };
   });
 
   // Step 2c: is any changed role relevant to role synchronization?

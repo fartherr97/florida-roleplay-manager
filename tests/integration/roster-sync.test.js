@@ -555,6 +555,35 @@ describe.skipIf(!available)('roster tracking', () => {
     expect(gateway.calls.filter((call) => call.action === 'SET_NICKNAME')).toEqual([]);
   });
 
+  it('does not let a roster failure break role synchronization', async () => {
+    // What a rolling deploy looks like from the bot's side: new code running against a
+    // database where the roster migration has not landed yet. Rosters are secondary and
+    // must degrade quietly; role sync is what was already in production.
+    const broken = new Proxy(prisma, {
+      get(target, key) {
+        if (key === 'rosterRank') {
+          return {
+            findMany: () => Promise.reject(new Error('relation "roster_ranks" does not exist')),
+          };
+        }
+        return target[key];
+      },
+    });
+
+    gateway.defineMember(IDS.MAIN_GUILD, { id: IDS.D_MEMBER, roleIds: [R_MOD] });
+
+    const result = await handleMemberRoleChange({
+      discordGuildId: IDS.MAIN_GUILD,
+      discordUserId: IDS.D_MEMBER,
+      addedRoleIds: [R_MOD],
+      removedRoleIds: [],
+      prisma: broken,
+    });
+
+    // It returned rather than threw, and reported the roster as simply not queued.
+    expect(result.rosterQueued).toBe(false);
+  });
+
   it('serves only published rosters to the website', async () => {
     gateway.defineMember(IDS.MAIN_GUILD, {
       id: IDS.D_MEMBER,
