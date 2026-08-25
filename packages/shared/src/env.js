@@ -111,6 +111,11 @@ const envSchema = z
     SESSION_SECRET: z.string().min(1).optional(),
     SESSION_TTL_SECONDS: integerish(86400, { min: 60, max: 60 * 60 * 24 * 30 }),
     COOKIE_SECURE: booleanish(false),
+    // The cookie domain. When the dashboard runs on a different subdomain from
+    // this API (e.g. flrp.us and api.flrp.us), the readable CSRF cookie must be
+    // scoped to the shared parent (.flrp.us) or the dashboard cannot read it to
+    // echo the token back. Leave unset for local development (host-only).
+    COOKIE_DOMAIN: z.string().min(1).optional(),
     CORS_ALLOWED_ORIGINS: stringList(),
     // Where the OAuth callback sends the browser after a successful sign-in. The
     // dashboard lives on the website, not this API, so without it the callback

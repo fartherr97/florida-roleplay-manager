@@ -39,6 +39,10 @@ async function sessionPlugin(fastify) {
 
   const cookieOptions = {
     path: '/',
+    // Scoping to the shared parent domain is what lets the dashboard on another
+    // subdomain read the (non-httpOnly) CSRF cookie to echo it back. Unset in
+    // dev, where the cookie stays host-only.
+    domain: env.COOKIE_DOMAIN || undefined,
     httpOnly: true,
     sameSite: 'lax',
     secure: env.COOKIE_SECURE,
