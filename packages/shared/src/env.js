@@ -24,7 +24,17 @@ function booleanish(defaultValue) {
   return z.preprocess((value) => {
     if (value === undefined || value === null || value === '') return defaultValue;
     if (typeof value === 'boolean') return value;
-    const normalized = String(value).trim().toLowerCase();
+
+    // Secret managers and `.env` files frequently store a value with its quotes
+    // attached, so `true` arrives as `"true"`. Stripping them here is safe because a
+    // boolean's value space is tiny - unlike a password, no legitimate value is a
+    // quoted string - and it turns a deployment-blocking error into a non-event.
+    const normalized = String(value)
+      .trim()
+      .replace(/^(['"])(.*)\1$/, '$2')
+      .trim()
+      .toLowerCase();
+
     if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
     if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
     return value;
@@ -130,6 +140,33 @@ const envSchema = z
  * Extra requirements per service. Validating these per-process means the worker does
  * not need OAuth secrets and the API does not need a bot token.
  */
+/**
+ * Variables whose value may be echoed back in a configuration error.
+ *
+ * Deliberately an allowlist rather than a denylist of secrets: a new secret added to the
+ * schema must not start leaking into logs because somebody forgot to exclude it.
+ */
+const SAFE_TO_ECHO = new Set([
+  'NODE_ENV',
+  'DEV_MODE',
+  'DISCORD_MOCK',
+  'LOG_LEVEL',
+  'COOKIE_SECURE',
+  'API_TRUST_PROXY',
+  'API_HOST',
+  'API_PORT',
+  'SYNC_DRY_RUN_DEFAULT',
+  'SYNC_MARKER_TTL_SECONDS',
+  'SYNC_MAX_REMOVALS_THRESHOLD',
+  'SYNC_LOCK_TTL_SECONDS',
+  'WORKER_CONCURRENCY',
+  'SESSION_TTL_SECONDS',
+  'RATE_LIMIT_MAX',
+  'RATE_LIMIT_WINDOW',
+  'RECONCILE_CRON',
+  'MAPPING_VALIDATION_CRON',
+]);
+
 const SERVICE_REQUIREMENTS = {
   bot: ['DATABASE_URL', 'REDIS_URL', 'DISCORD_BOT_TOKEN', 'DISCORD_CLIENT_ID'],
   worker: ['DATABASE_URL', 'REDIS_URL', 'DISCORD_BOT_TOKEN'],
@@ -168,7 +205,15 @@ export function parseEnv({ service = 'script', source = process.env } = {}) {
   const result = envSchema.safeParse(sanitized);
   if (!result.success) {
     const issues = result.error.issues
-      .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .map((issue) => {
+        const key = issue.path.join('.') || '(root)';
+        // Show what actually arrived. "expected boolean, received string" without the
+        // value sends you looking at the wrong variable; `received "true"` (with the
+        // quotes visible) explains itself. Only safe for the values below, which are
+        // never secrets - a token's contents must not reach a log.
+        const shown = SAFE_TO_ECHO.has(key) ? ` (received ${JSON.stringify(sanitized[key])})` : '';
+        return `  - ${key}: ${issue.message}${shown}`;
+      })
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
