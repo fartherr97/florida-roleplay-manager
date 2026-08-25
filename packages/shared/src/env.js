@@ -112,6 +112,11 @@ const envSchema = z
     SESSION_TTL_SECONDS: integerish(86400, { min: 60, max: 60 * 60 * 24 * 30 }),
     COOKIE_SECURE: booleanish(false),
     CORS_ALLOWED_ORIGINS: stringList(),
+    // Where the OAuth callback sends the browser after a successful sign-in. The
+    // dashboard lives on the website, not this API, so without it the callback
+    // would leave the user on a JSON response. Falls back to the first allowed
+    // CORS origin when unset.
+    DASHBOARD_URL: z.string().min(1).optional(),
     API_TRUST_PROXY: booleanish(false),
     RATE_LIMIT_MAX: integerish(120, { min: 1, max: 100000 }),
     RATE_LIMIT_WINDOW: z.string().min(1).default('1 minute'),

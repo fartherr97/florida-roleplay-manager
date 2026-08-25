@@ -115,6 +115,15 @@ export default async function authRoutes(fastify) {
     });
 
     log.info({ userId: identity.userId }, 'website sign-in');
+
+    // Send the browser back to the dashboard rather than stranding it on this
+    // JSON. The base is the configured dashboard URL, falling back to the first
+    // allowed CORS origin; if neither is set (a bare API deployment) the JSON
+    // response is kept so the flow still completes.
+    const dashboardBase = env.DASHBOARD_URL || env.CORS_ALLOWED_ORIGINS[0];
+    if (dashboardBase) {
+      return reply.redirect(new URL('/management/bot', dashboardBase).toString());
+    }
     return { ok: true, userId: identity.userId };
   });
 
