@@ -202,6 +202,7 @@ Coverage of the specification's required cases lives in `tests/`:
 - [Database and migrations](docs/database.md)
 - [Production deployment](docs/deployment.md)
 - [Deploying to Railway](docs/railway.md) — a step-by-step walkthrough
+- [Migrating to Northflank](docs/northflank.md) — moving a running deployment across
 - [Security considerations](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Backup and recovery](docs/backup-recovery.md)
