@@ -27,8 +27,10 @@ import {
   getSystemHealth,
   grantPermission,
   issueGrant,
+  listAccessTiers,
   listCapabilities,
   listGrants,
+  listGuildDiscordRoles,
   listGuilds,
   listManagedRoles,
   listMappings,
@@ -40,6 +42,7 @@ import {
   lookupMember,
   queryAuditLogs,
   registerGuild,
+  removeAccessTier,
   removeGuild,
   removeManagedRole,
   resolveSyncIssue,
@@ -49,6 +52,7 @@ import {
   retrySyncIssue,
   revokeGrant,
   revokePermission,
+  setAccessTier,
   setMappingEnabled,
   setRosterMemberDetails,
   syncRoster,
@@ -102,6 +106,18 @@ export default async function resourceRoutes(fastify) {
     removeGuild(request.ctx, { ...request.body, guildId: request.params.guildId }),
   );
 
+  // --- the guild's Discord roles -------------------------------------------
+
+  // Read-through to Discord rather than to the database: these are Discord's roles, not
+  // the platform's, so there is nothing local to serve. `guildId` is the platform id, so
+  // the actor's scope is checked before any snowflake reaches Discord.
+  route(fastify, 'get', '/guilds/:guildId/discord-roles', (request) =>
+    listGuildDiscordRoles(request.ctx, {
+      guildId: request.params.guildId,
+      refresh: request.query?.refresh === 'true',
+    }),
+  );
+
   // --- managed roles -------------------------------------------------------
 
   route(fastify, 'get', '/roles', (request) => listManagedRoles(request.ctx, request.query));
@@ -119,6 +135,20 @@ export default async function resourceRoutes(fastify) {
   route(fastify, 'post', '/grants', (request) => issueGrant(request.ctx, request.body));
   route(fastify, 'delete', '/grants/:grantId', (request) =>
     revokeGrant(request.ctx, { ...request.body, grantId: request.params.grantId }),
+  );
+
+  // --- Discord-role access tiers -------------------------------------------
+
+  // Mapping a Discord role to a tier is what grants website access in the first place, so
+  // this is deliberately the one piece of configuration that also stays reachable from
+  // Discord: locking yourself out of the dashboard must not lock you out of fixing it.
+  route(fastify, 'get', '/access', (request) => listAccessTiers(request.ctx));
+  route(fastify, 'post', '/access', (request) => setAccessTier(request.ctx, request.body));
+  route(fastify, 'delete', '/access/:discordRoleId', (request) =>
+    removeAccessTier(request.ctx, {
+      ...request.body,
+      discordRoleId: request.params.discordRoleId,
+    }),
   );
 
   // --- members -------------------------------------------------------------

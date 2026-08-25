@@ -195,6 +195,93 @@ roster, and there should be no UI implying there is. People join by being given 
 role. The editable fields are the roster's own settings, its rank bindings, and each
 member's callsign and displayed name.
 
+### Discord roles — the role picker
+
+| Method | Path                             | Notes                                                           |
+| ------ | -------------------------------- | --------------------------------------------------------------- |
+| GET    | `/guilds/:guildId/discord-roles` | The guild's Discord roles. `?refresh=true` to bypass the cache. |
+
+Anywhere the UI asks for a Discord role — roster ranks, access tiers, managed roles,
+mappings — drive it from this. Never make the user paste a snowflake.
+
+`:guildId` is the **platform's** guild id from `GET /guilds`, not the Discord snowflake.
+The API resolves it and checks your scope before it calls Discord, so you cannot use this
+to read a server you have no access to.
+
+```jsonc
+{
+  "guildId": "01J...",
+  "discordGuildId": "900000000000000001",
+  "botHighestPosition": 20,
+  "cachedAt": "2026-08-25T21:00:00.000Z",
+  "roles": [
+    {
+      "id": "904",
+      "name": "Owner",
+      "position": 40,
+      "color": 0,
+      "hoist": true,
+      "mentionable": false,
+      "managed": false,
+      "assignable": false,
+    },
+    {
+      "id": "902",
+      "name": "Administrator",
+      "position": 10,
+      "color": 15158332,
+      "hoist": true,
+      "mentionable": false,
+      "managed": false,
+      "assignable": true,
+    },
+  ],
+}
+```
+
+Sorted highest-first; render in the order given.
+
+**`assignable` is the field that matters.** It is false when the role sits above the bot's
+own highest role, or when Discord owns it (another bot's integration role). Binding a
+non-assignable role produces a configuration that looks correct and silently does nothing —
+so show those greyed out with an explanation ("the bot's role must be above this one in
+Server Settings → Roles") rather than hiding them, which would just make the role look
+missing.
+
+`botHighestPosition: 0` means the API could not read the bot's own membership, so
+assignability is unknown and everything comes back `false`. Worth saying so rather than
+telling the user nothing can be assigned.
+
+Cached about a minute server side. Pass `?refresh=true` behind an explicit "refresh"
+control after somebody has just made a role in Discord.
+
+A `409`-style `PRECONDITION_FAILED` here means the API has no bot token configured. Show
+the message; it names the variable.
+
+### Access tiers — who is staff
+
+| Method | Path                     | Notes                                       |
+| ------ | ------------------------ | ------------------------------------------- |
+| GET    | `/access`                | The role → tier rules, highest tier first.  |
+| POST   | `/access`                | `{discordRoleId, roleName, level, reason?}` |
+| DELETE | `/access/:discordRoleId` | Remove a rule.                              |
+
+This is the important one to understand: **holding a mapped Discord role is what grants
+website access**, and the same rule grants bot access. There is no separate user list and
+no invite flow. Somebody becomes staff by getting the role in Discord.
+
+`level` is one of `20` Supervisor, `40` Command, `60` Manager, `80` Staff, `100` Admin.
+Holders get every capability up to their tier. Use `GET /permissions/capabilities` for
+labels rather than hard-coding these.
+
+Two things to build in deliberately:
+
+- **Warn before removing a rule.** Revoking the tier that the signed-in user holds is how
+  somebody locks themselves out of the dashboard. It is recoverable — the same mapping can
+  be set from Discord with `/access grant` — but say so before they click, not after.
+- Requires the `access.manage` capability, which in practice means a global admin. Expect
+  `403` for everybody else and hide the screen.
+
 ### Permissions and the current user
 
 | Method | Path                         | Notes                                                    |
@@ -311,8 +398,9 @@ working around it.
 
 1. Sign in, sign out, and the "you're not staff" state. Nothing else works until this does.
 2. The public roster pages — no auth, cached endpoint, immediately useful.
-3. The roster management screens.
-4. Permissions, driven off the capability catalogue.
+3. The roster management screens — these need the role picker
+   (`/guilds/:guildId/discord-roles`), so build that as a shared component first.
+4. Access tiers, then permissions driven off the capability catalogue.
 5. Sync issues and audit.
 
 Ask me before designing anything that implies a capability the API does not have. If an

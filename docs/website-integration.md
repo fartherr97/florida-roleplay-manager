@@ -117,6 +117,41 @@ The public read model is documented in [rosters.md](rosters.md). It is the endpo
 staff pages should render from — it is cached, contains no internal identifiers, and needs
 no session.
 
+### Discord roles
+
+| Method | Path                             | Notes                                                                      |
+| ------ | -------------------------------- | -------------------------------------------------------------------------- |
+| GET    | `/guilds/:guildId/discord-roles` | The guild's Discord roles, highest first. `?refresh=true` skips the cache. |
+
+The API has no gateway connection, so this is a read-through to Discord's REST API with the
+bot token, cached for a minute. It is a read, so it does not disturb the rule that the
+worker is the only process that writes to Discord.
+
+`:guildId` is the platform's `ApprovedGuild` id. It is resolved and scope-checked before
+any snowflake reaches Discord — passing a caller-supplied Discord id would let anybody
+enumerate the roles of any server the bot happens to be in.
+
+Each role carries `assignable`: false when the role outranks the bot, or when an
+integration owns it. Binding a non-assignable role yields a configuration that looks right
+and does nothing, so a picker should surface it rather than let it be chosen silently.
+
+Needs `DISCORD_BOT_TOKEN` on the API deployment. Without it the API still boots and serves
+everything else — this endpoint alone returns a `PRECONDITION_FAILED` naming the variable.
+
+### Access tiers
+
+| Method | Path                     | Notes                                              |
+| ------ | ------------------------ | -------------------------------------------------- |
+| GET    | `/access`                | Role → tier rules, highest first.                  |
+| POST   | `/access`                | Map a role to a tier (`access.manage` capability). |
+| DELETE | `/access/:discordRoleId` | Remove the mapping. The Discord role is untouched. |
+
+The same rules `/access` manages from Discord. Deliberately available in both places:
+mapping a role to a tier is what grants website access, so managing it _only_ on the
+website would mean a misconfiguration could lock everybody out of the tool needed to fix
+it. `GLOBAL_ADMIN_DISCORD_IDS` is the other half of that guarantee — those accounts are
+granted access on every boot regardless of tier.
+
 ### Permissions and access
 
 | Method | Path                         | Notes                                                                                              |
@@ -194,6 +229,7 @@ COOKIE_SECURE=true
 API_TRUST_PROXY=true          # when behind a proxy, so rate limiting sees real IPs
 SESSION_SECRET=<32+ random chars>
 SESSION_TTL_SECONDS=86400
+DISCORD_BOT_TOKEN=<bot token> # optional: only the Discord role picker needs it
 ```
 
 `CORS_ALLOWED_ORIGINS` is an exact-match allowlist, not a pattern — credentials and `*` are

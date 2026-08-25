@@ -20,6 +20,7 @@ export * from './managed-role-service.js';
 export * from './grant-service.js';
 export * from './role-grant-service.js';
 export * from './access-service.js';
+export * from './discord-role-service.js';
 export * from './roster-nickname.js';
 export * from './roster-resolve.js';
 export * from './roster-service.js';
