@@ -151,9 +151,17 @@ export default async function authRoutes(fastify) {
     // JSON. The base is the configured dashboard URL, falling back to the first
     // allowed CORS origin; if neither is set (a bare API deployment) the JSON
     // response is kept so the flow still completes.
+    //
+    // A bare apex host (two labels, e.g. flrp.us) very often has no DNS record of
+    // its own while its www host does, so upgrade it: a DASHBOARD_URL left on the
+    // apex must not bounce a sign-in to a domain that will not resolve. The proper
+    // fix is still to point DASHBOARD_URL at the host the site is actually served
+    // on — this only stops a misconfiguration from dead-ending the login.
     const dashboardBase = env.DASHBOARD_URL || env.CORS_ALLOWED_ORIGINS[0];
     if (dashboardBase) {
-      return reply.redirect(new URL('/management/bot', dashboardBase).toString());
+      const base = new URL(dashboardBase);
+      if (base.hostname.split('.').length === 2) base.hostname = `www.${base.hostname}`;
+      return reply.redirect(new URL('/management/bot', base).toString());
     }
     return { ok: true, userId: identity.userId };
   });
