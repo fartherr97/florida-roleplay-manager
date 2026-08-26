@@ -56,7 +56,10 @@ export class DiscordRoleCatalog {
    * @param {object} [params.rest] an injected REST-alike, for tests
    */
   constructor({ token, applicationId, ttlMs = DEFAULT_ROLE_CACHE_TTL_MS, rest } = {}) {
-    this.#rest = rest ?? new REST({ version: '10' }).setToken(token);
+    // A bounded per-request timeout so a slow or hanging Discord read fails fast with a
+    // real error, rather than stalling until an upstream proxy times out — which would
+    // reach the browser as an opaque, CORS-less "Load failed" with no cause to show.
+    this.#rest = rest ?? new REST({ version: '10', timeout: 10_000 }).setToken(token);
     this.#applicationId = applicationId;
     this.#ttlMs = ttlMs;
   }

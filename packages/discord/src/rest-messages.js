@@ -20,7 +20,8 @@ let cachedToken = null;
 
 function restFor(token) {
   if (!cachedRest || cachedToken !== token) {
-    cachedRest = new REST({ version: '10' }).setToken(token);
+    // Bounded timeout so a hanging post/edit fails fast rather than stalling the request.
+    cachedRest = new REST({ version: '10', timeout: 10_000 }).setToken(token);
     cachedToken = token;
   }
   return cachedRest;
