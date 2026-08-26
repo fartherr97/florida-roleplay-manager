@@ -122,6 +122,15 @@ const envSchema = z
     // would leave the user on a JSON response. Falls back to the first allowed
     // CORS origin when unset.
     DASHBOARD_URL: z.string().min(1).optional(),
+
+    // Soft-whitelist. The website posts submissions to this API authenticated by a
+    // shared ingest token; the API posts each to the review channel with buttons, and
+    // approving assigns the whitelist role. All optional: the feature is inert until
+    // every value is set.
+    WHITELIST_INGEST_TOKEN: z.string().min(1).optional(),
+    WHITELIST_REVIEW_CHANNEL_ID: z.string().regex(SNOWFLAKE).optional(),
+    WHITELIST_ROLE_ID: z.string().regex(SNOWFLAKE).optional(),
+
     API_TRUST_PROXY: booleanish(false),
     RATE_LIMIT_MAX: integerish(120, { min: 1, max: 100000 }),
     RATE_LIMIT_WINDOW: z.string().min(1).default('1 minute'),

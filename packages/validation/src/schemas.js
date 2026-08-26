@@ -269,6 +269,32 @@ export const removeAccessTierSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Soft whitelist
+// ---------------------------------------------------------------------------
+
+/** A whitelist submission forwarded from the website. */
+export const whitelistSubmissionSchema = z.object({
+  discordUserId: snowflake,
+  username: z.string().trim().min(1).max(100),
+  // The rendered question/answer pairs, exactly as the applicant filled them in.
+  answers: z
+    .array(
+      z.object({
+        question: z.string().trim().min(1).max(300),
+        answer: z.string().trim().min(1).max(2000),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
+
+/** A staff decision on a whitelist submission (from the Discord buttons). */
+export const whitelistDecisionSchema = z.object({
+  submissionId: uuid,
+  decision: z.enum(['approve', 'deny']),
+});
+
+// ---------------------------------------------------------------------------
 // ES Transfer Portal
 // ---------------------------------------------------------------------------
 

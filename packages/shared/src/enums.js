@@ -278,5 +278,9 @@ export const AuditAction = Object.freeze({
   TRANSFER_ROLES_SET: 'transfer.roles_set',
   TRANSFER_EXECUTED: 'transfer.executed',
 
+  WHITELIST_SUBMITTED: 'whitelist.submitted',
+  WHITELIST_APPROVED: 'whitelist.approved',
+  WHITELIST_DENIED: 'whitelist.denied',
+
   SYSTEM_SETTING_UPDATED: 'system.setting_updated',
 });

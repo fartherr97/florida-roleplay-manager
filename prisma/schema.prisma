@@ -813,3 +813,27 @@ model SystemSetting {
 
   @@map("system_settings")
 }
+
+/// A soft-whitelist submission: a member answers a few questions on the website to
+/// be able to join the game server. The submission is posted to a staff review
+/// channel with Approve/Deny buttons; approving assigns the whitelist role.
+model WhitelistSubmission {
+  id                  String    @id @default(uuid()) @db.Uuid
+  discordUserId       String
+  username            String
+  /// The rendered question/answer pairs, exactly as submitted.
+  answers             Json
+  /// PENDING | APPROVED | DENIED
+  status              String    @default("PENDING")
+  /// The staff review message this submission was posted as.
+  channelId           String?
+  messageId           String?
+  reviewedByDiscordId String?
+  reviewedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([discordUserId])
+  @@index([status])
+  @@map("whitelist_submissions")
+}

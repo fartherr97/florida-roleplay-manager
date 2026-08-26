@@ -18,6 +18,7 @@ import authPlugin from './plugins/auth.js';
 import authRoutes from './routes/auth.js';
 import resourceRoutes from './routes/resources.js';
 import rosterRoutes from './routes/rosters.js';
+import whitelistRoutes from './routes/whitelist.js';
 
 /**
  * @param {object} [options]
@@ -99,6 +100,9 @@ export async function buildApp(options = {}) {
       // Public, and registered alongside the rest so it shares the /api prefix, CORS and
       // rate limiting. Its handlers do not use `fastify.authenticated`.
       await instance.register(rosterRoutes);
+      // The whitelist ingest is public too, but token-gated (server-to-server from the
+      // website), so it also does not use `fastify.authenticated`.
+      await instance.register(whitelistRoutes);
       await instance.register(resourceRoutes);
     },
     { prefix: '/api' },
