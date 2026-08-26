@@ -283,6 +283,19 @@ export async function runTransferJob({ data, gateway, prisma = getPrisma() }) {
   const skipped = [];
   const failed = [];
 
+  // Defence in depth: never trust the role ids carried on the job. Re-resolve each
+  // department's configured transfer roles from the database and act only on the
+  // intersection, so even a forged or tampered queue job (e.g. a Redis-level
+  // compromise) can never strip or grant a role outside the configured set.
+  const [fromGuild, toGuild] = await Promise.all([
+    prisma.approvedGuild.findFirst({ where: { id: from.id, ...notDeleted } }),
+    prisma.approvedGuild.findFirst({ where: { id: to.id, ...notDeleted } }),
+  ]);
+  const allowedRemove = new Set(fromGuild?.transferRoleIds ?? []);
+  const allowedAdd = new Set(toGuild?.transferRoleIds ?? []);
+  const removeRoleIds = (from.removeRoleIds ?? []).filter((roleId) => allowedRemove.has(roleId));
+  const addRoleIds = (to.addRoleIds ?? []).filter((roleId) => allowedAdd.has(roleId));
+
   // Live membership in each guild, so an already-correct change is a no-op rather than a
   // wasted (and audit-noisy) API call.
   const fromMember = await gateway
@@ -296,7 +309,7 @@ export async function runTransferJob({ data, gateway, prisma = getPrisma() }) {
   const toHeld = new Set(toMember?.roleIds ?? []);
 
   // --- strip the outgoing department -------------------------------------
-  for (const roleId of from.removeRoleIds ?? []) {
+  for (const roleId of removeRoleIds) {
     if (!fromMember) {
       failed.push({ side: 'remove', id: roleId, message: `Member is not in ${from.name}.` });
       continue;
@@ -327,7 +340,7 @@ export async function runTransferJob({ data, gateway, prisma = getPrisma() }) {
   }
 
   // --- grant the incoming department -------------------------------------
-  for (const roleId of to.addRoleIds ?? []) {
+  for (const roleId of addRoleIds) {
     if (!toMember) {
       failed.push({ side: 'add', id: roleId, message: `Member is not in ${to.name}.` });
       continue;

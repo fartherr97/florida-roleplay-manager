@@ -73,8 +73,11 @@ async function sessionPlugin(fastify) {
         await getRedis().del(sessionKey(unsigned.value));
       }
     }
-    this.clearCookie(SESSION_COOKIE, { path: '/' });
-    this.clearCookie(CSRF_COOKIE, { path: '/' });
+    // Clear with the same domain the cookies were set with, or a domain-scoped
+    // cookie is not evicted and the browser keeps presenting a dead-session crumb.
+    const clearOptions = { path: '/', domain: env.COOKIE_DOMAIN || undefined };
+    this.clearCookie(SESSION_COOKIE, clearOptions);
+    this.clearCookie(CSRF_COOKIE, clearOptions);
   });
 
   // Attach the session to every request, and enforce CSRF for unsafe methods.

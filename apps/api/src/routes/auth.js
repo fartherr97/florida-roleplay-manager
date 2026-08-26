@@ -25,6 +25,8 @@ import { getRedis } from '@frm/queue';
 
 const log = createLogger('api.auth');
 const OAUTH_STATE_TTL = 600;
+/** Signed, httpOnly crumb that binds the OAuth `state` to the initiating browser. */
+const OAUTH_STATE_COOKIE = 'frm_oauth_state';
 
 export default async function authRoutes(fastify) {
   const env = getEnv();
@@ -38,10 +40,25 @@ export default async function authRoutes(fastify) {
       throw new PreconditionError('Discord sign-in is not configured on this server.');
     }
 
-    // The state parameter is stored server side and single use, which is what prevents
-    // login CSRF (an attacker completing a flow into somebody else's browser).
+    // The state parameter is single-use (stored server side) AND bound to this
+    // browser via a signed, httpOnly cookie set below. Both are required to
+    // prevent login CSRF: single-use alone does not stop an attacker replaying
+    // their own valid code+state into a victim's browser, because a bare state
+    // is valid in any browser. Requiring the callback's state to match this
+    // browser's cookie is what actually ties the flow to the person who started
+    // it.
     const state = randomBytes(32).toString('hex');
     await getRedis().set(`${REDIS_PREFIX.OAUTH_STATE}:${state}`, '1', 'EX', OAUTH_STATE_TTL);
+
+    reply.setCookie(OAUTH_STATE_COOKIE, state, {
+      path: '/',
+      domain: env.COOKIE_DOMAIN || undefined,
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: env.COOKIE_SECURE,
+      signed: true,
+      maxAge: OAUTH_STATE_TTL,
+    });
 
     const url = new URL('https://discord.com/api/oauth2/authorize');
     url.searchParams.set('client_id', env.DISCORD_CLIENT_ID);
@@ -62,6 +79,20 @@ export default async function authRoutes(fastify) {
 
     const { code, state } = request.query ?? {};
     if (!code || !state) throw new UnauthenticatedError('The sign-in request was incomplete.');
+
+    // The state must match the one issued to THIS browser (login-CSRF defence).
+    // Clear the crumb either way so a failed attempt cannot be retried with it.
+    const rawStateCookie = request.cookies?.[OAUTH_STATE_COOKIE];
+    const unsignedState = rawStateCookie
+      ? reply.unsignCookie(rawStateCookie)
+      : { valid: false, value: null };
+    reply.clearCookie(OAUTH_STATE_COOKIE, {
+      path: '/',
+      domain: env.COOKIE_DOMAIN || undefined,
+    });
+    if (!unsignedState.valid || unsignedState.value !== String(state)) {
+      throw new UnauthenticatedError('That sign-in link was not started in this browser. Please try again.');
+    }
 
     const consumed = await getRedis().del(`${REDIS_PREFIX.OAUTH_STATE}:${state}`);
     if (consumed !== 1) {
