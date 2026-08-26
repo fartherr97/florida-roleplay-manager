@@ -9,9 +9,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  makeCallsignAllocator,
   planMemberChange,
   planRosterChanges,
   presentRoster,
+  resolveCallsign,
 } from '../../packages/core/src/roster-resolve.js';
 
 const roster = {
@@ -266,6 +268,139 @@ describe('planRosterChanges', () => {
     });
 
     expect(changes).toEqual([]);
+  });
+});
+
+describe('callsign auto-assignment', () => {
+  // Ranks with a callsign block: Moderators 120–129, Admins 130–139.
+  const rangedRanks = [
+    {
+      id: 'r-mod',
+      discordRoleId: '100',
+      name: 'Moderator',
+      shortName: 'Mod',
+      position: 10,
+      callsignRangeStart: 120,
+      callsignRangeEnd: 129,
+    },
+    {
+      id: 'r-admin',
+      discordRoleId: '200',
+      name: 'Administrator',
+      shortName: 'Admin',
+      position: 20,
+      callsignRangeStart: 130,
+      callsignRangeEnd: 139,
+    },
+  ];
+
+  describe('resolveCallsign', () => {
+    it('keeps a callsign already inside the rank block', () => {
+      expect(resolveCallsign(rangedRanks[0], '125', () => '120')).toBe('125');
+    });
+
+    it('reissues a number that belongs to a different rank block', () => {
+      // 125 is a Moderator number; on promotion to Admin it moves into 130–139.
+      expect(resolveCallsign(rangedRanks[1], '125', () => '130')).toBe('130');
+    });
+
+    it('issues one when the member has none', () => {
+      expect(resolveCallsign(rangedRanks[0], null, () => '120')).toBe('120');
+    });
+
+    it('leaves a custom non-numeric callsign alone', () => {
+      expect(resolveCallsign(rangedRanks[0], 'K9-1', () => '120')).toBe('K9-1');
+    });
+
+    it('keeps whatever they had when the rank has no block', () => {
+      const plain = { id: 'x', name: 'Mod', shortName: 'Mod', position: 1 };
+      expect(resolveCallsign(plain, '999', () => '120')).toBe('999');
+      expect(resolveCallsign(plain, null, () => '120')).toBeNull();
+    });
+  });
+
+  describe('makeCallsignAllocator', () => {
+    it('hands out the lowest free number and reserves it', () => {
+      const allocate = makeCallsignAllocator([
+        { callsign: '120', status: 'ACTIVE' },
+        { callsign: '122', status: 'ACTIVE' },
+      ]);
+      expect(allocate(rangedRanks[0])).toBe('121');
+      expect(allocate(rangedRanks[0])).toBe('123');
+    });
+
+    it('ignores departed members when counting what is taken', () => {
+      const allocate = makeCallsignAllocator([{ callsign: '120', status: 'DEPARTED' }]);
+      expect(allocate(rangedRanks[0])).toBe('120');
+    });
+
+    it('returns null when the block is full', () => {
+      const taken = Array.from({ length: 10 }, (_, i) => ({
+        callsign: String(120 + i),
+        status: 'ACTIVE',
+      }));
+      expect(makeCallsignAllocator(taken)(rangedRanks[0])).toBeNull();
+    });
+  });
+
+  it('issues a callsign to a new member and puts it in their nickname', () => {
+    const change = planMemberChange({
+      roster,
+      ranks: rangedRanks,
+      membership: null,
+      member: member({ roleIds: ['100'] }),
+      allocateCallsign: makeCallsignAllocator([]),
+    });
+
+    expect(change.type).toBe('ADD');
+    expect(change.callsign).toBe('120');
+    expect(change.callsignChanged).toBe(true);
+    expect(change.nickname).toBe('120 | Mod | mike_flrp');
+  });
+
+  it('moves a numeric callsign into the new block on promotion', () => {
+    const change = planMemberChange({
+      roster,
+      ranks: rangedRanks,
+      membership: membership({ callsign: '125', rankId: 'r-mod', rank: rangedRanks[0] }),
+      member: member({ nickname: '125 | Mod | Mike', roleIds: ['200'] }),
+      allocateCallsign: makeCallsignAllocator([{ callsign: '130', status: 'ACTIVE' }]),
+    });
+
+    expect(change.type).toBe('PROMOTE');
+    expect(change.callsign).toBe('131');
+    expect(change.nickname).toBe('131 | Admin | Mike');
+  });
+
+  it('gives two brand-new members distinct numbers in one pass', () => {
+    const changes = planRosterChanges({
+      roster,
+      ranks: rangedRanks,
+      memberships: [],
+      members: [
+        { id: 'a', username: 'ana', nickname: null, roleIds: ['100'] },
+        { id: 'b', username: 'ben', nickname: null, roleIds: ['100'] },
+      ],
+    });
+
+    const issued = changes.map((c) => c.callsign).sort();
+    expect(issued).toEqual(['120', '121']);
+  });
+
+  it('persists a callsign even when nickname sync is off', () => {
+    const change = planMemberChange({
+      roster: { ...roster, nicknameSyncEnabled: false },
+      ranks: rangedRanks,
+      membership: membership({ callsign: null, rankId: 'r-mod', rank: rangedRanks[0] }),
+      member: member({ nickname: 'Mike', roleIds: ['100'] }),
+      nicknameSync: false,
+      allocateCallsign: makeCallsignAllocator([]),
+    });
+
+    expect(change.callsign).toBe('120');
+    expect(change.callsignChanged).toBe(true);
+    expect(change.actionable).toBe(true);
+    expect(change.nickname).toBeNull();
   });
 });
 

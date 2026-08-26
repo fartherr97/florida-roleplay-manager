@@ -526,6 +526,11 @@ model RosterRank {
   /// Seniority. Highest wins when a member holds several bound roles, and orders the
   /// roster on the website.
   position      Int
+  /// Auto-assign callsign block. When both ends are set, a member who joins or is
+  /// promoted into this rank with no in-range callsign is issued the lowest free number
+  /// in [start, end]. Both null means callsigns on this rank stay manual.
+  callsignRangeStart Int?
+  callsignRangeEnd   Int?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?

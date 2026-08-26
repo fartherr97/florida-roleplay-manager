@@ -52,6 +52,83 @@ export function rankShortName(rank) {
 }
 
 /**
+ * A rank's configured callsign block, or null when it has none.
+ *
+ * Both ends must be present and coherent for the block to count — a half-set range is
+ * treated as no range so a misconfiguration never issues nonsense numbers.
+ */
+export function callsignRange(rank) {
+  const start = rank?.callsignRangeStart;
+  const end = rank?.callsignRangeEnd;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start > end) return null;
+  return { start, end };
+}
+
+/** The integer a callsign represents, or null when it is not a plain number. */
+function numericCallsign(callsign) {
+  return /^\d+$/.test(String(callsign ?? '')) ? Number(callsign) : null;
+}
+
+/**
+ * The callsign a member should wear given their rank.
+ *
+ * Only plain numeric callsigns are auto-managed: a custom badge like `K9-1` is somebody's
+ * deliberate choice and is left alone. A number already inside the rank's block is kept,
+ * so a promotion within the same block does not churn it; a missing number, or one that
+ * belongs to a different rank's block, is reissued from this rank's block. When the block
+ * is full — or the rank has none — whatever they already had stands.
+ *
+ * @param {object|null} rank
+ * @param {string|null} current the member's existing callsign
+ * @param {(rank: object) => (string|null)} [allocate] reserves and returns the next free number
+ * @returns {string|null}
+ */
+export function resolveCallsign(rank, current, allocate) {
+  const range = callsignRange(rank);
+  if (!range) return current ?? null;
+
+  if (current != null) {
+    const n = numericCallsign(current);
+    if (n === null) return current; // a custom, non-numeric callsign is theirs to keep
+    if (n >= range.start && n <= range.end) return current; // already in this block
+  }
+
+  const next = allocate ? allocate(rank) : null;
+  return next ?? current ?? null;
+}
+
+/**
+ * Builds a callsign allocator over a set of memberships.
+ *
+ * The allocator hands out the lowest free number in a rank's block and reserves it, so a
+ * single planning pass over a whole roster never issues the same number twice. Only active
+ * numeric callsigns count as taken — a departed member's number is free to reissue.
+ *
+ * @param {Array<{callsign?: string|null, status?: string}>} memberships
+ * @returns {(rank: object) => (string|null)}
+ */
+export function makeCallsignAllocator(memberships = []) {
+  const taken = new Set();
+  for (const membership of memberships) {
+    if (membership?.status && membership.status !== RosterMembershipStatus.ACTIVE) continue;
+    const n = numericCallsign(membership?.callsign);
+    if (n !== null) taken.add(n);
+  }
+
+  return (rank) => {
+    const range = callsignRange(rank);
+    if (!range) return null;
+    for (let n = range.start; n <= range.end; n += 1) {
+      if (!taken.has(n)) {
+        taken.add(n);
+        return String(n);
+      }
+    }
+    return null; // the block is full
+  };
+}
+
+/**
  * @typedef {object} RosterChange
  * @property {'ADD'|'PROMOTE'|'REMOVE'|'NICKNAME'|'NONE'} type
  * @property {string} discordUserId
@@ -73,7 +150,14 @@ export function rankShortName(rank) {
  * @param {boolean} [params.nicknameSync] whether this roster owns the member's nickname
  * @returns {RosterChange}
  */
-export function planMemberChange({ roster, ranks, membership, member, nicknameSync = true }) {
+export function planMemberChange({
+  roster,
+  ranks,
+  membership,
+  member,
+  nicknameSync = true,
+  allocateCallsign = null,
+}) {
   const discordUserId = membership?.discordUserId ?? member?.id;
   const previousRank = membership?.rank ?? null;
 
@@ -119,12 +203,18 @@ export function planMemberChange({ roster, ranks, membership, member, nicknameSy
     });
   }
 
+  // The callsign the member should wear for this rank: kept when it is already right,
+  // issued from the rank's block when it is missing or belongs to another rank.
+  const currentCallsign = membership?.callsign ?? null;
+  const callsign = resolveCallsign(rank, currentCallsign, allocateCallsign);
+  const callsignChanged = (callsign ?? null) !== currentCallsign;
+
   const built = nicknameSync
     ? buildManagedNickname({
         currentNickname: member.nickname ?? null,
         fallbackName: member.username ?? member.displayName ?? null,
         preferredName: membership?.preferredName ?? null,
-        callsign: membership?.callsign ?? null,
+        callsign,
         rank: rankShortName(rank),
       })
     : null;
@@ -144,6 +234,10 @@ export function planMemberChange({ roster, ranks, membership, member, nicknameSy
   } else if (nicknameNeedsWrite) {
     type = 'NICKNAME';
     reason = `${roster.name}: nickname out of date`;
+  } else if (callsignChanged) {
+    // A callsign was issued but nothing else changed — e.g. on a roster that does not
+    // rewrite nicknames. Still worth persisting so the website shows it.
+    reason = `${roster.name}: callsign ${callsign} issued`;
   }
 
   return finish({
@@ -151,6 +245,8 @@ export function planMemberChange({ roster, ranks, membership, member, nicknameSy
     discordUserId,
     rank,
     previousRank,
+    callsign,
+    callsignChanged,
     nickname: nicknameNeedsWrite ? built.nickname : null,
     name: built?.name ?? name,
     reason,
@@ -159,14 +255,22 @@ export function planMemberChange({ roster, ranks, membership, member, nicknameSy
 
 /** Normalises a change so every caller sees the same shape. */
 function finish(change) {
-  return {
+  const normalized = {
     nickname: null,
     previousRank: null,
     rank: null,
+    callsign: null,
+    callsignChanged: false,
     name: '',
     ...change,
-    // A change is only worth queueing when it alters the roster or the nickname.
-    actionable: change.type !== 'NONE' || Boolean(change.nickname),
+  };
+  return {
+    ...normalized,
+    // A change is worth queueing when it alters the roster, the nickname, or the callsign.
+    actionable:
+      normalized.type !== 'NONE' ||
+      Boolean(normalized.nickname) ||
+      Boolean(normalized.callsignChanged),
   };
 }
 
@@ -185,6 +289,11 @@ export function planRosterChanges({ roster, ranks, memberships, members }) {
   const seen = new Set();
   const changes = [];
 
+  // One allocator for the whole pass, seeded from the numbers already in use, so a sweep
+  // that issues several callsigns at once never hands out the same one twice.
+  const allocateCallsign = makeCallsignAllocator(memberships);
+  const nicknameSync = roster.nicknameSyncEnabled !== false;
+
   for (const membership of memberships) {
     seen.add(membership.discordUserId);
     const change = planMemberChange({
@@ -192,7 +301,8 @@ export function planRosterChanges({ roster, ranks, memberships, members }) {
       ranks,
       membership,
       member: byId.get(membership.discordUserId) ?? null,
-      nicknameSync: roster.nicknameSyncEnabled !== false,
+      nicknameSync,
+      allocateCallsign,
     });
     if (change.actionable) changes.push(change);
   }
@@ -207,7 +317,8 @@ export function planRosterChanges({ roster, ranks, memberships, members }) {
       ranks,
       membership: null,
       member,
-      nicknameSync: roster.nicknameSyncEnabled !== false,
+      nicknameSync,
+      allocateCallsign,
     });
     if (change.actionable) changes.push(change);
   }
@@ -241,6 +352,9 @@ export function presentRoster(roster) {
       shortName: rankShortName(rank),
       position: rank.position,
       discordRoleId: rank.discordRoleId,
+      // The auto-assign block, so the dashboard can show and edit it. Null when unset.
+      callsignRangeStart: rank.callsignRangeStart ?? null,
+      callsignRangeEnd: rank.callsignRangeEnd ?? null,
       members: active
         .filter((membership) => membership.rankId === rank.id)
         .map((membership) => ({

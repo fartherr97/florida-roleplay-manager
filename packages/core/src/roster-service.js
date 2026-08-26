@@ -199,6 +199,17 @@ export async function bindRosterRank(ctx, input) {
     where: { rosterId_discordRoleId: { rosterId: roster.id, discordRoleId: data.discordRoleId } },
   });
 
+  // Only touch the callsign block when the caller sent it: the `/roster bind` command
+  // does not know about ranges, so re-binding a rank from Discord must not wipe a range
+  // an administrator configured on the dashboard.
+  const rangePatch =
+    data.callsignRangeStart === undefined && data.callsignRangeEnd === undefined
+      ? {}
+      : {
+          callsignRangeStart: data.callsignRangeStart ?? null,
+          callsignRangeEnd: data.callsignRangeEnd ?? null,
+        };
+
   const rank = existing
     ? await prisma.rosterRank.update({
         where: { id: existing.id },
@@ -207,6 +218,7 @@ export async function bindRosterRank(ctx, input) {
           shortName: data.shortName ?? null,
           position: data.position,
           deletedAt: null,
+          ...rangePatch,
         },
       })
     : await prisma.rosterRank.create({
@@ -216,6 +228,7 @@ export async function bindRosterRank(ctx, input) {
           name: data.name,
           shortName: data.shortName ?? null,
           position: data.position,
+          ...rangePatch,
         },
       });
 

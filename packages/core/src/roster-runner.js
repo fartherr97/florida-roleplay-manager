@@ -28,7 +28,7 @@ import { discardNicknameMarker, withMemberLock, writeNicknameMarker } from '@frm
 import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
 import { notifyGlobalAdmins } from './notify.js';
-import { planMemberChange, planRosterChanges } from './roster-resolve.js';
+import { makeCallsignAllocator, planMemberChange, planRosterChanges } from './roster-resolve.js';
 import { queueRosterSync } from './roster-service.js';
 
 const log = createLogger('core.roster-runner');
@@ -310,12 +310,26 @@ async function planOne({ roster, discordGuildId, discordUserId, gateway, prisma 
   // Not on the roster and not in the guild: nothing to reconcile, and no row to create.
   if (!member && !membership) return [];
 
+  // The callsigns already in use on this roster, so a number issued to this one member
+  // does not collide with anybody else's. Their own row is excluded — reissuing them the
+  // number they already hold is a no-op, not a collision.
+  const others = await prisma.rosterMembership.findMany({
+    where: {
+      rosterId: roster.id,
+      status: RosterMembershipStatus.ACTIVE,
+      callsign: { not: null },
+      NOT: { discordUserId },
+    },
+    select: { callsign: true, status: true },
+  });
+
   const change = planMemberChange({
     roster,
     ranks: roster.ranks,
     membership,
     member,
     nicknameSync: roster.nicknameSyncEnabled,
+    allocateCallsign: makeCallsignAllocator(others),
   });
 
   return change.actionable ? [change] : [];
@@ -418,6 +432,7 @@ async function persistChange({ roster, change, prisma }) {
       userId: identity?.userId ?? null,
       rankId: change.rank?.id ?? null,
       displayName: change.name || null,
+      callsign: change.callsign ?? null,
       status: RosterMembershipStatus.ACTIVE,
     },
     update: {
@@ -428,6 +443,9 @@ async function persistChange({ roster, change, prisma }) {
       // The resolved name is refreshed; `preferredName` is never written here, because
       // an administrator's override is not the reconciler's to overwrite.
       ...(change.name ? { displayName: change.name } : {}),
+      // Only when the planner actually issued a new callsign — a manually set one it chose
+      // to keep must not be rewritten.
+      ...(change.callsignChanged ? { callsign: change.callsign ?? null } : {}),
     },
   });
 }

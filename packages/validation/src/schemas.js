@@ -435,14 +435,31 @@ export const deleteRosterSchema = z.object({
   reason: optionalReason,
 });
 
-export const bindRosterRankSchema = z.object({
-  slug: rosterSlug,
-  discordRoleId: snowflake,
-  name: z.string().trim().min(1).max(60),
-  shortName: z.string().trim().min(1).max(20).optional(),
-  position: z.number().int().min(0).max(999),
-  reason: optionalReason,
-});
+export const bindRosterRankSchema = z
+  .object({
+    slug: rosterSlug,
+    discordRoleId: snowflake,
+    name: z.string().trim().min(1).max(60),
+    shortName: z.string().trim().min(1).max(20).optional(),
+    position: z.number().int().min(0).max(999),
+    // Auto-assign callsign block. When both are set, a member who joins or is promoted
+    // into this rank with no in-range callsign is issued the lowest free number in
+    // [start, end]. Explicit null on both clears the block; undefined leaves it alone.
+    callsignRangeStart: z.number().int().min(0).max(99999).nullish(),
+    callsignRangeEnd: z.number().int().min(0).max(99999).nullish(),
+    reason: optionalReason,
+  })
+  .refine((data) => (data.callsignRangeStart == null) === (data.callsignRangeEnd == null), {
+    message: 'Set both ends of the callsign range, or neither.',
+    path: ['callsignRangeEnd'],
+  })
+  .refine(
+    (data) =>
+      data.callsignRangeStart == null ||
+      data.callsignRangeEnd == null ||
+      data.callsignRangeStart <= data.callsignRangeEnd,
+    { message: 'The range start must be at or below the range end.', path: ['callsignRangeEnd'] },
+  );
 
 export const unbindRosterRankSchema = z.object({
   slug: rosterSlug,
