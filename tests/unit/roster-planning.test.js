@@ -343,6 +343,18 @@ describe('callsign auto-assignment', () => {
     });
   });
 
+  it('gives ??? when the block is full, and upgrades it once a number frees up', () => {
+    const full = Array.from({ length: 10 }, (_, i) => ({ callsign: String(120 + i), status: 'ACTIVE' }));
+
+    const noRoom = resolveCallsign(rangedRanks[0], null, makeCallsignAllocator(full));
+    expect(noRoom).toBe('???');
+
+    // 125 departed, so ??? should take it on the next pass rather than sticking.
+    const withGap = full.map((m) => (m.callsign === '125' ? { ...m, status: 'DEPARTED' } : m));
+    const upgraded = resolveCallsign(rangedRanks[0], '???', makeCallsignAllocator(withGap));
+    expect(upgraded).toBe('125');
+  });
+
   it('issues a callsign to a new member and puts it in their nickname', () => {
     const change = planMemberChange({
       roster,

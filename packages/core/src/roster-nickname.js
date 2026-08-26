@@ -168,7 +168,14 @@ export function buildManagedNickname({
   // Precedence: an explicitly set name wins, then whatever their nickname says their
   // name is, then their username. The parsed name is preferred over the raw nickname so
   // an existing managed prefix is stripped instead of being rendered into the new one.
-  const name = collapse(preferredName) || parsed.name || collapse(fallbackName) || '';
+  const rawName = collapse(preferredName) || parsed.name || collapse(fallbackName) || '';
+
+  // Every name source is parsed again before it is trusted. A `preferredName` or a
+  // username can itself be in the managed shape — "189 | Trial Mod" left behind by a
+  // past rename, or a display name someone typed that way — and rendering it verbatim
+  // is what stacks a nickname into "168 | Mod | 189 | Trial Mod". Taking the trailing
+  // name segment keeps the rebuild idempotent no matter how the source got its prefix.
+  const name = parseNickname(rawName).name || rawName;
 
   return {
     name,

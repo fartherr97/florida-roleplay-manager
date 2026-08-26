@@ -64,6 +64,14 @@ export function callsignRange(rank) {
   return { start, end };
 }
 
+/**
+ * What a member wears when their rank has a callsign block but every number in it is
+ * already taken. Visible on purpose — a placeholder in the nickname and on the roster is
+ * how an administrator notices the block needs widening, rather than the member silently
+ * going numberless. It is reissued a real number automatically the moment one frees up.
+ */
+export const CALLSIGN_UNASSIGNED = '???';
+
 /** The integer a callsign represents, or null when it is not a plain number. */
 function numericCallsign(callsign) {
   return /^\d+$/.test(String(callsign ?? '')) ? Number(callsign) : null;
@@ -75,8 +83,9 @@ function numericCallsign(callsign) {
  * Only plain numeric callsigns are auto-managed: a custom badge like `K9-1` is somebody's
  * deliberate choice and is left alone. A number already inside the rank's block is kept,
  * so a promotion within the same block does not churn it; a missing number, or one that
- * belongs to a different rank's block, is reissued from this rank's block. When the block
- * is full — or the rank has none — whatever they already had stands.
+ * belongs to a different rank's block, is reissued from this rank's block. When every
+ * number in the block is taken the member gets the `???` placeholder until one frees up;
+ * when the rank has no block at all, whatever they already had stands.
  *
  * @param {object|null} rank
  * @param {string|null} current the member's existing callsign
@@ -87,14 +96,15 @@ export function resolveCallsign(rank, current, allocate) {
   const range = callsignRange(rank);
   if (!range) return current ?? null;
 
-  if (current != null) {
+  // The placeholder is not a real callsign — it always wants replacing with a number.
+  if (current != null && current !== CALLSIGN_UNASSIGNED) {
     const n = numericCallsign(current);
     if (n === null) return current; // a custom, non-numeric callsign is theirs to keep
     if (n >= range.start && n <= range.end) return current; // already in this block
   }
 
   const next = allocate ? allocate(rank) : null;
-  return next ?? current ?? null;
+  return next ?? CALLSIGN_UNASSIGNED;
 }
 
 /**

@@ -180,6 +180,19 @@ describe('buildManagedNickname', () => {
     });
     expect(built.nickname).toBe('165 | Jr. Admin | Mike');
   });
+
+  it('does not stack when the name source itself carries a managed prefix', () => {
+    // A promotion where the previous prefix leaked into the stored/preferred name.
+    // Rendering it verbatim would produce "168 | Mod | 189 | Trial Mod".
+    const built = buildManagedNickname({
+      currentNickname: '189 | Trial Mod | Jordan',
+      preferredName: '189 | Trial Mod | Jordan',
+      callsign: '168',
+      rank: 'Mod',
+    });
+    expect(built.nickname).toBe('168 | Mod | Jordan');
+    expect(built.name).toBe('Jordan');
+  });
 });
 
 describe('inferPreferredName', () => {
