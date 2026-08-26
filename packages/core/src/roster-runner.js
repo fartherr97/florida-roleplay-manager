@@ -130,6 +130,11 @@ async function reconcile({ job, gateway, prisma }) {
   const discordGuildId = roster.guild.discordGuildId;
   const single = payload.discordUserId ?? null;
 
+  // Keep each rank's stored colour in step with its Discord role, so the website can
+  // band the roster in the same colours staff see in Discord. Cheap: one role listing,
+  // and a write only for the ranks whose colour actually changed.
+  await syncRankColors({ roster, discordGuildId, gateway, prisma });
+
   const changes = single
     ? await planOne({ roster, discordGuildId, discordUserId: single, gateway, prisma })
     : await planAll({ roster, discordGuildId, gateway, prisma });
@@ -333,6 +338,32 @@ async function planOne({ roster, discordGuildId, discordUserId, gateway, prisma 
   });
 
   return change.actionable ? [change] : [];
+}
+
+/**
+ * Refreshes each rank's stored colour from its bound Discord role.
+ *
+ * Runs at the top of every reconciliation so the website's roster bands stay in step
+ * with Discord without anybody setting a colour by hand. Best-effort: if the role listing
+ * fails, the roster still reconciles with whatever colours were last stored.
+ */
+async function syncRankColors({ roster, discordGuildId, gateway, prisma }) {
+  const roles = await gateway.listRoles(discordGuildId).catch((error) => {
+    log.debug({ err: serializeError(error), slug: roster.slug }, 'could not list roles for colours');
+    return [];
+  });
+  if (roles.length === 0) return;
+
+  const colorById = new Map(roles.map((role) => [role.id, role.color ?? null]));
+  for (const rank of roster.ranks) {
+    const next = colorById.get(rank.discordRoleId) ?? null;
+    if ((rank.color ?? null) !== next) {
+      await prisma.rosterRank
+        .update({ where: { id: rank.id }, data: { color: next } })
+        .catch((error) => log.debug({ err: serializeError(error) }, 'could not store rank colour'));
+      rank.color = next;
+    }
+  }
 }
 
 /** Plans the whole roster: the scheduled sweep and `/roster sync`. */

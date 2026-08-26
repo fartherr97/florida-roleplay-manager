@@ -118,6 +118,9 @@ export class DiscordJsRoleGateway {
       id: role.id,
       name: role.name,
       position: role.position,
+      // discord.js reports an unset colour as 0 / "#000000"; treat that as no colour
+      // so a default role does not paint the roster black.
+      color: role.color ? role.hexColor : null,
       managed: role.managed,
       isEveryone: role.id === guild.id,
     };
@@ -132,6 +135,7 @@ export class DiscordJsRoleGateway {
       id: role.id,
       name: role.name,
       position: role.position,
+      color: role.color ? role.hexColor : null,
       managed: role.managed,
       isEveryone: role.id === guild.id,
     }));

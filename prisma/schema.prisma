@@ -531,6 +531,10 @@ model RosterRank {
   /// in [start, end]. Both null means callsigns on this rank stay manual.
   callsignRangeStart Int?
   callsignRangeEnd   Int?
+  /// The bound Discord role's colour as a hex string (e.g. "#f2800d"), refreshed on each
+  /// sync so the website can band the roster in the same colours staff see in Discord.
+  /// Null when the role has no colour set.
+  color         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?

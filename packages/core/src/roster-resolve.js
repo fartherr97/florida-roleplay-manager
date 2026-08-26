@@ -365,6 +365,8 @@ export function presentRoster(roster) {
       // The auto-assign block, so the dashboard can show and edit it. Null when unset.
       callsignRangeStart: rank.callsignRangeStart ?? null,
       callsignRangeEnd: rank.callsignRangeEnd ?? null,
+      // The bound Discord role's colour, so the website can band the roster to match.
+      color: rank.color ?? null,
       members: active
         .filter((membership) => membership.rankId === rank.id)
         .map((membership) => ({
