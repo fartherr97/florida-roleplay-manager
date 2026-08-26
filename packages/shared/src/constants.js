@@ -24,6 +24,9 @@ export const QUEUE_NAMES = Object.freeze({
   ROLE_ACTION: 'frm-role-action',
   MAINTENANCE: 'frm-maintenance',
   ROSTER: 'frm-roster',
+  // Department transfers get their own queue so a transfer bug can neither starve nor be
+  // starved by role synchronization: the two never share a worker.
+  TRANSFER: 'frm-transfer',
 });
 
 /**

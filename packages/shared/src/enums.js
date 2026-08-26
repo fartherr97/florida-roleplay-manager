@@ -275,5 +275,8 @@ export const AuditAction = Object.freeze({
   ROSTER_MEMBER_UPDATED: 'roster.member_updated',
   ROSTER_NICKNAME_SET: 'roster.nickname_set',
 
+  TRANSFER_ROLES_SET: 'transfer.roles_set',
+  TRANSFER_EXECUTED: 'transfer.executed',
+
   SYSTEM_SETTING_UPDATED: 'system.setting_updated',
 });

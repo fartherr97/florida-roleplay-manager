@@ -30,6 +30,7 @@ export const JobName = Object.freeze({
   MAPPING_VALIDATION: 'mapping-validation',
   ROSTER_MEMBER_SYNC: 'roster-member-sync',
   ROSTER_SYNC: 'roster-sync',
+  TRANSFER_EXECUTE: 'transfer-execute',
 });
 
 /** Which queue each job name belongs to. */
@@ -46,6 +47,9 @@ const QUEUE_FOR_JOB = Object.freeze({
   // then cannot starve or stall role synchronization, and vice versa.
   [JobName.ROSTER_MEMBER_SYNC]: QUEUE_NAMES.ROSTER,
   [JobName.ROSTER_SYNC]: QUEUE_NAMES.ROSTER,
+  // Department transfers likewise: isolated from the reconciliation engine so a manual
+  // transfer can never be caught up in, or hold up, a guild-wide resync.
+  [JobName.TRANSFER_EXECUTE]: QUEUE_NAMES.TRANSFER,
 });
 
 /** Maps a SyncJobType onto the job name that processes it. */
@@ -97,6 +101,7 @@ export const getSyncQueue = () => getQueue(QUEUE_NAMES.SYNC);
 export const getRoleActionQueue = () => getQueue(QUEUE_NAMES.ROLE_ACTION);
 export const getMaintenanceQueue = () => getQueue(QUEUE_NAMES.MAINTENANCE);
 export const getRosterQueue = () => getQueue(QUEUE_NAMES.ROSTER);
+export const getTransferQueue = () => getQueue(QUEUE_NAMES.TRANSFER);
 
 /**
  * Enqueues a job.

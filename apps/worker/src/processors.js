@@ -12,6 +12,7 @@ import {
   runScheduledReconciliation,
   runScheduledRosterSweep,
   runSyncJob,
+  runTransferJob,
   validateManagedRoles,
 } from '@frm/core';
 import { getPrisma } from '@frm/database';
@@ -143,5 +144,25 @@ export function createRoleActionProcessor({ gateway }) {
   return async function processRoleAction(job) {
     const { syncJobId } = job.data;
     return runSyncJob({ jobId: syncJobId, gateway, prisma: getPrisma() });
+  };
+}
+
+/**
+ * Builds the processor for the transfer queue.
+ *
+ * A department transfer is a manual, one-shot role change, so unlike a sync it carries
+ * its whole instruction in the job data rather than a database row. The result is
+ * returned so the dashboard, which polls the job, can show exactly what was applied.
+ */
+export function createTransferProcessor({ gateway }) {
+  return async function processTransfer(job) {
+    log.info(
+      { jobId: job.id, target: job.data?.targetDiscordUserId },
+      'processing transfer',
+    );
+    // Every failure is recorded per role inside the result; the job itself only throws on
+    // an unexpected error, and a transfer is never worth retrying blindly - re-running it
+    // would re-evaluate against roles it may have just changed.
+    return runTransferJob({ data: job.data, gateway, prisma: getPrisma() });
   };
 }

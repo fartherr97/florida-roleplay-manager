@@ -255,6 +255,10 @@ model ApprovedGuild {
   syncEnabled    Boolean   @default(true)
   /// Named feature flags, e.g. ["mappings", "manual-grants"].
   features       String[]  @default([])
+  /// The Discord role ids that define membership in this department for the transfer
+  /// portal. On a transfer these are stripped from the outgoing department and added in
+  /// the incoming one. Empty on a guild that is not a transfer endpoint.
+  transferRoleIds String[] @default([])
   notes          String?
   registeredAt   DateTime  @default(now())
   registeredById String?   @db.Uuid

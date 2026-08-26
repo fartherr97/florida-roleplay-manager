@@ -19,6 +19,7 @@ import {
   createRoleActionProcessor,
   createRosterProcessor,
   createSyncProcessor,
+  createTransferProcessor,
 } from './processors.js';
 
 const log = createLogger('worker');
@@ -50,6 +51,12 @@ async function main() {
       concurrency: Math.max(1, Math.floor(env.WORKER_CONCURRENCY / 2)),
     }),
     new Worker(QUEUE_NAMES.ROSTER, createRosterProcessor({ gateway }), {
+      connection,
+      concurrency: Math.max(1, Math.floor(env.WORKER_CONCURRENCY / 2)),
+    }),
+    // Transfers are manual and infrequent; a small concurrency keeps a burst of them from
+    // contending with role synchronization for Discord's rate limit.
+    new Worker(QUEUE_NAMES.TRANSFER, createTransferProcessor({ gateway }), {
       connection,
       concurrency: Math.max(1, Math.floor(env.WORKER_CONCURRENCY / 2)),
     }),

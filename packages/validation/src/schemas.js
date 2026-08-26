@@ -269,6 +269,37 @@ export const removeAccessTierSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// ES Transfer Portal
+// ---------------------------------------------------------------------------
+
+/** Sets the Discord role ids that define membership in a department for transfers. */
+export const setTransferRolesSchema = z.object({
+  // The platform ApprovedGuild id, resolved server side - never a Discord snowflake.
+  guildId: uuid,
+  // Empty clears the set, marking the guild as no longer a transfer endpoint.
+  roleIds: z.array(snowflake).max(25),
+  reason: optionalReason,
+});
+
+/** Previews (or requests) a member's move from one department to another. */
+export const transferRequestSchema = z
+  .object({
+    discordUserId: snowflake,
+    fromGuildId: uuid,
+    toGuildId: uuid,
+    reason: optionalReason,
+  })
+  .refine((value) => value.fromGuildId !== value.toGuildId, {
+    message: 'The outgoing and incoming departments must be different',
+    path: ['toGuildId'],
+  });
+
+/** Reads the state of a queued transfer by its job id. */
+export const transferJobSchema = z.object({
+  jobId: z.string().trim().min(1).max(200),
+});
+
+// ---------------------------------------------------------------------------
 // Rosters
 // ---------------------------------------------------------------------------
 

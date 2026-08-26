@@ -308,6 +308,26 @@ const DEFINITIONS = [
     dangerous: true,
     minLevel: PermissionLevel.GLOBAL_ADMIN,
   },
+
+  // --- Transfers ------------------------------------------------------------
+  {
+    key: 'transfer.manage',
+    category: 'transfer',
+    description:
+      "Configure each department's transfer role set: the Discord roles stripped and granted when a member moves between departments.",
+    allowedScopes: [GLOBAL],
+    dangerous: true,
+    minLevel: PermissionLevel.STAFF,
+  },
+  {
+    key: 'transfer.execute',
+    category: 'transfer',
+    description:
+      'Transfer a member between departments, stripping the outgoing department roles and granting the incoming ones.',
+    allowedScopes: [GLOBAL],
+    dangerous: true,
+    minLevel: PermissionLevel.COMMAND,
+  },
 ];
 
 /** @type {ReadonlyMap<string, CapabilityDefinition>} */

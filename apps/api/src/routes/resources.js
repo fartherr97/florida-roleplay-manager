@@ -37,12 +37,17 @@ import {
   listMembers,
   listPermissions,
   listRosters,
+  getTransfer,
+  getTransferConfig,
   listSyncIssues,
   listSyncJobs,
+  listTransfers,
   lookupMember,
+  previewTransfer,
   queryAuditLogs,
   registerGuild,
   removeAccessTier,
+  requestTransfer,
   removeGuild,
   removeManagedRole,
   resolveSyncIssue,
@@ -55,6 +60,7 @@ import {
   setAccessTier,
   setMappingEnabled,
   setRosterMemberDetails,
+  setTransferRoles,
   syncRoster,
   testMapping,
   unbindRosterRank,
@@ -149,6 +155,25 @@ export default async function resourceRoutes(fastify) {
       ...request.body,
       discordRoleId: request.params.discordRoleId,
     }),
+  );
+
+  // --- ES Transfer Portal --------------------------------------------------
+
+  // Configuration is every department's transfer role set; a transfer strips the outgoing
+  // set and grants the incoming one. Preview is read-only; requesting one queues the work
+  // to the worker (the only process that writes to Discord) and returns a job id the
+  // dashboard polls.
+  route(fastify, 'get', '/transfers/config', (request) => getTransferConfig(request.ctx));
+  route(fastify, 'post', '/transfers/config', (request) =>
+    setTransferRoles(request.ctx, request.body),
+  );
+  route(fastify, 'post', '/transfers/preview', (request) =>
+    previewTransfer(request.ctx, request.body),
+  );
+  route(fastify, 'post', '/transfers', (request) => requestTransfer(request.ctx, request.body));
+  route(fastify, 'get', '/transfers', (request) => listTransfers(request.ctx, request.query));
+  route(fastify, 'get', '/transfers/:jobId', (request) =>
+    getTransfer(request.ctx, { jobId: request.params.jobId }),
   );
 
   // --- members -------------------------------------------------------------
