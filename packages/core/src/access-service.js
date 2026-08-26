@@ -521,18 +521,31 @@ export async function listSelectableCapabilities(ctx) {
 export async function listTiers(ctx) {
   authorize(ctx.actor, { capability: 'access.manage', scope: {} });
   const prisma = ctx.prisma ?? getPrisma();
+
   const tiers = await prisma.accessTier.findMany({
     where: notDeleted,
     orderBy: [{ name: 'asc' }],
-    include: { _count: { select: { roleMappings: { where: notDeleted } } } },
   });
+
+  // Count the live mappings per tier with a plain groupBy rather than a filtered
+  // relation count, which keeps the query simple and portable.
+  const counts =
+    tiers.length === 0
+      ? []
+      : await prisma.roleAccessTier.groupBy({
+          by: ['accessTierId'],
+          where: { ...notDeleted, accessTierId: { in: tiers.map((tier) => tier.id) } },
+          _count: { _all: true },
+        });
+  const countByTier = new Map(counts.map((row) => [row.accessTierId, row._count._all]));
+
   return tiers.map((tier) => ({
     id: tier.id,
     name: tier.name,
     description: tier.description,
     color: tier.color,
     capabilities: tier.capabilities,
-    roleCount: tier._count.roleMappings,
+    roleCount: countByTier.get(tier.id) ?? 0,
     createdAt: tier.createdAt,
     updatedAt: tier.updatedAt,
   }));
