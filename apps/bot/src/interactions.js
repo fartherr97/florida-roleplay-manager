@@ -46,11 +46,17 @@ export async function handleInteraction(interaction, { gateway }) {
     return undefined;
   }
 
-  const guard = await guardInteraction(interaction, { gateway });
+  const guard = await guardInteraction(interaction, {
+    gateway,
+    requireActor: command.actorExempt !== true,
+  });
   if (!guard.ok) return undefined;
 
   const { ctx, requestId } = guard;
   const started = Date.now();
+  // An actor-exempt command (e.g. /bgcheck) has no bot actor; fall back to the raw
+  // interaction user for logging, and skip the actor-scoped audit write.
+  const actorId = ctx?.actor?.user?.id ?? interaction.user.id;
 
   try {
     await command.execute(interaction, { ctx, gateway });
@@ -58,7 +64,7 @@ export async function handleInteraction(interaction, { gateway }) {
       {
         command: interaction.commandName,
         subcommand: safeSubcommand(interaction),
-        actor: ctx.actor.user.id,
+        actor: actorId,
         discordGuildId: interaction.guildId,
         durationMs: Date.now() - started,
         requestId,
@@ -70,7 +76,7 @@ export async function handleInteraction(interaction, { gateway }) {
       {
         command: interaction.commandName,
         subcommand: safeSubcommand(interaction),
-        actor: ctx.actor.user.id,
+        actor: actorId,
         requestId,
         err: serializeError(error),
       },
@@ -78,12 +84,15 @@ export async function handleInteraction(interaction, { gateway }) {
     );
 
     // A denied or failed command is itself worth auditing: an audit trail of only
-    // successes cannot answer "who keeps trying to do this?".
-    await recordFailure(ctx, {
-      action: AuditAction.AUTH_DENIED,
-      error,
-      reason: `${interaction.commandName} ${safeSubcommand(interaction) ?? ''}`.trim(),
-    }).catch(() => {});
+    // successes cannot answer "who keeps trying to do this?". Only when there is an
+    // actor to attribute it to — an actor-exempt command has none.
+    if (ctx) {
+      await recordFailure(ctx, {
+        action: AuditAction.AUTH_DENIED,
+        error,
+        reason: `${interaction.commandName} ${safeSubcommand(interaction) ?? ''}`.trim(),
+      }).catch(() => {});
+    }
 
     await respond(interaction, renderError(error, requestId)).catch(() => {});
   }

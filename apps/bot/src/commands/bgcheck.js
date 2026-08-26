@@ -18,6 +18,11 @@ import { memberOption } from '../lib/options.js';
 
 const log = createLogger('bot.bgcheck');
 
+// This command is authorized by the website (the caller must hold `discipline.view`), not by
+// the bot's actor model, so it runs without a linked/tiered bot account. The guild allowlist
+// and rate limit still apply.
+export const actorExempt = true;
+
 export const data = new SlashCommandBuilder()
   .setName('bgcheck')
   .setDescription("Show a member's disciplinary record (verbal + non-verbal, last 6 months)")

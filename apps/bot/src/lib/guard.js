@@ -56,11 +56,15 @@ function subcommandOf(interaction) {
 
 /**
  * @param {import('discord.js').Interaction} interaction
- * @param {{gateway?: object}} [deps] the gateway, used to read the caller's main-guild roles
- *   for Discord-role-driven access tiers
- * @returns {Promise<{ok: false} | {ok: true, ctx: object, requestId: string}>}
+ * @param {{gateway?: object, requireActor?: boolean}} [deps] the gateway, used to read the
+ *   caller's main-guild roles for Discord-role-driven access tiers; `requireActor` (default
+ *   true) may be turned off for a command that authorizes its caller elsewhere — `/bgcheck`
+ *   is gated by the website's `discipline.view`, not by the bot's actor model, so it must run
+ *   for a staff member who holds that even without a linked/tiered bot account. The guild
+ *   allowlist and rate limit still apply.
+ * @returns {Promise<{ok: false} | {ok: true, ctx: object|null, requestId: string}>}
  */
-export async function guardInteraction(interaction, { gateway } = {}) {
+export async function guardInteraction(interaction, { gateway, requireActor = true } = {}) {
   const requestId = newRequestId();
 
   if (!interaction.inGuild()) {
@@ -102,6 +106,12 @@ export async function guardInteraction(interaction, { gateway } = {}) {
   } catch (error) {
     await reply(interaction, renderError(error, requestId));
     return { ok: false };
+  }
+
+  // A command that authorizes its caller elsewhere runs without a bot actor. It has still
+  // cleared the guild allowlist and the rate limit above.
+  if (!requireActor) {
+    return { ok: true, ctx: null, requestId };
   }
 
   try {
