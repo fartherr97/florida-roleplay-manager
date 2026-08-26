@@ -131,6 +131,13 @@ const envSchema = z
     WHITELIST_REVIEW_CHANNEL_ID: z.string().regex(SNOWFLAKE).optional(),
     WHITELIST_ROLE_ID: z.string().regex(SNOWFLAKE).optional(),
 
+    // The community website, which owns disciplinary records. `/bgcheck` calls it
+    // to read a member's folded record and post the embed it builds. The token is
+    // the SAME shared secret the website validates as BOT_TOKEN. Both optional: the
+    // command reports it is unavailable until they are set.
+    WEBSITE_API_URL: z.string().min(1).optional(),
+    WEBSITE_BOT_TOKEN: z.string().min(1).optional(),
+
     API_TRUST_PROXY: booleanish(false),
     RATE_LIMIT_MAX: integerish(120, { min: 1, max: 100000 }),
     RATE_LIMIT_WINDOW: z.string().min(1).default('1 minute'),
