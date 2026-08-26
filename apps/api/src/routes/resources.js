@@ -94,6 +94,10 @@ export default async function resourceRoutes(fastify) {
       user: profile.user,
       grants: profile.grants,
       permissions: profile.permissions,
+      // The dashboard echoes this back in the x-csrf-token header on writes.
+      // Returning it here (rather than relying on the readable cookie) keeps
+      // writes working when the dashboard and API are on different subdomains.
+      csrfToken: request.session?.csrfToken ?? null,
       capabilities: request.actor.assignments.map((assignment) => ({
         capability: assignment.capabilityKey,
         scopeType: assignment.scopeType,
