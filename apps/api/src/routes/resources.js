@@ -27,8 +27,13 @@ import {
   getSystemHealth,
   grantPermission,
   issueGrant,
+  createTier,
+  deleteTier,
   listAccessTiers,
   listCapabilities,
+  listSelectableCapabilities,
+  listTiers,
+  updateTier,
   listGrants,
   listGuildDiscordRoles,
   listGuilds,
@@ -148,6 +153,22 @@ export default async function resourceRoutes(fastify) {
   // Mapping a Discord role to a tier is what grants website access in the first place, so
   // this is deliberately the one piece of configuration that also stays reachable from
   // Discord: locking yourself out of the dashboard must not lock you out of fixing it.
+  // The plain-language capability catalogue an admin picks from when defining a tier, and the
+  // named-tier CRUD. These sit under /access because they need the same `access.manage`
+  // capability; the static /access/tiers and /access/capabilities paths are matched ahead of
+  // the /access/:discordRoleId mapping delete, so they never collide.
+  route(fastify, 'get', '/access/capabilities', (request) =>
+    listSelectableCapabilities(request.ctx),
+  );
+  route(fastify, 'get', '/access/tiers', (request) => listTiers(request.ctx));
+  route(fastify, 'post', '/access/tiers', (request) => createTier(request.ctx, request.body));
+  route(fastify, 'patch', '/access/tiers/:id', (request) =>
+    updateTier(request.ctx, { ...request.body, id: request.params.id }),
+  );
+  route(fastify, 'delete', '/access/tiers/:id', (request) =>
+    deleteTier(request.ctx, { ...request.body, id: request.params.id }),
+  );
+
   route(fastify, 'get', '/access', (request) => listAccessTiers(request.ctx));
   route(fastify, 'post', '/access', (request) => setAccessTier(request.ctx, request.body));
   route(fastify, 'delete', '/access/:discordRoleId', (request) =>

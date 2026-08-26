@@ -253,15 +253,68 @@ export const applyRoleAssignmentSchema = z.object({
 /** The authority tiers a main-guild role may be mapped to (MEMBER is not a grant). */
 const accessTierLevels = Object.values(PermissionLevel).filter((level) => level > 0);
 
-export const setAccessTierSchema = z.object({
-  discordRoleId: snowflake,
-  roleName: z.string().trim().min(1).max(100),
-  level: z
-    .number()
-    .int()
-    .refine((value) => accessTierLevels.includes(value), 'Not a valid authority tier'),
+/**
+ * Capabilities a named tier may confer. `access.manage` is deliberately excluded so a tier
+ * can never widen who gets access - control over the mapping itself stays with explicitly
+ * provisioned administrators.
+ */
+const tierCapabilityKeys = CAPABILITY_KEYS.filter((key) => key !== 'access.manage');
+const tierCapability = z.enum(tierCapabilityKeys);
+const tierName = z.string().trim().min(1).max(60);
+const tierDescription = z.string().trim().max(300).optional();
+const tierCapabilities = z.array(tierCapability).min(1).max(tierCapabilityKeys.length);
+
+/** Define a new named access tier. */
+export const createAccessTierSchema = z.object({
+  name: tierName,
+  description: tierDescription,
+  capabilities: tierCapabilities,
   reason: optionalReason,
 });
+
+/** Edit an existing named tier. At least one editable field must be present. */
+export const updateAccessTierSchema = z
+  .object({
+    id: uuid,
+    name: tierName.optional(),
+    description: z.string().trim().max(300).nullable().optional(),
+    capabilities: tierCapabilities.optional(),
+    reason: optionalReason,
+  })
+  .refine(
+    (value) =>
+      value.name !== undefined ||
+      value.description !== undefined ||
+      value.capabilities !== undefined,
+    'Nothing to update',
+  );
+
+/** Delete (soft) a named tier. */
+export const deleteAccessTierSchema = z.object({
+  id: uuid,
+  reason: optionalReason,
+});
+
+/**
+ * Map a main-guild role to access. A mapping points at EITHER a named tier (the modern path,
+ * `accessTierId`) OR a legacy numeric `level`, never both and never neither.
+ */
+export const setAccessTierSchema = z
+  .object({
+    discordRoleId: snowflake,
+    roleName: z.string().trim().min(1).max(100),
+    level: z
+      .number()
+      .int()
+      .refine((value) => accessTierLevels.includes(value), 'Not a valid authority tier')
+      .optional(),
+    accessTierId: uuid.optional(),
+    reason: optionalReason,
+  })
+  .refine(
+    (value) => (value.level === undefined) !== (value.accessTierId === undefined),
+    'Provide exactly one of a named tier or a numeric level',
+  );
 
 export const removeAccessTierSchema = z.object({
   discordRoleId: snowflake,

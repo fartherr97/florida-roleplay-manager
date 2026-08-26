@@ -149,7 +149,12 @@ async function handleList(interaction, ctx) {
         title: 'Discord-role access',
         description: truncate(
           tiers
-            .map((tier) => `<@&${tier.discordRoleId}> → **${tierName(tier.permissionLevel)}**`)
+            .map(
+              (tier) =>
+                `<@&${tier.discordRoleId}> → **${
+                  tier.accessTier ? tier.accessTier.name : tierName(tier.permissionLevel)
+                }**`,
+            )
             .join('\n'),
           4000,
         ),

@@ -188,31 +188,32 @@ model User {
   updatedAt        DateTime   @updatedAt
   deletedAt        DateTime?
 
-  discordIdentities   DiscordIdentity[]      @relation("IdentityOwner")
-  linkedIdentities    DiscordIdentity[]      @relation("IdentityLinker")
-  permissions         PermissionAssignment[] @relation("PermissionHolder")
-  grantedPermissions  PermissionAssignment[] @relation("PermissionGranter")
-  revokedPermissions  PermissionAssignment[] @relation("PermissionRevoker")
-  manualGrants        ManualRoleGrant[]      @relation("ManualGrantHolder")
-  issuedManualGrants  ManualRoleGrant[]      @relation("ManualGrantIssuer")
-  revokedManualGrants ManualRoleGrant[]      @relation("ManualGrantRevoker")
-  registeredGuilds    ApprovedGuild[]        @relation("GuildRegistrar")
-  removedGuilds       ApprovedGuild[]        @relation("GuildRemover")
-  createdMappings     RoleMapping[]          @relation("MappingCreator")
-  initiatedJobs       SyncJob[]              @relation("JobInitiator")
-  syncActions         SyncAction[]           @relation("SyncActionSubject")
-  syncIssues          SyncIssue[]            @relation("IssueSubject")
-  resolvedIssues      SyncIssue[]            @relation("IssueResolver")
-  auditActions        AuditLog[]             @relation("AuditActor")
-  auditTargets        AuditLog[]             @relation("AuditTarget")
-  requestedApprovals  PendingApproval[]      @relation("ApprovalRequester")
-  resolvedApprovals   PendingApproval[]      @relation("ApprovalResolver")
-  approvalVotes       PendingApprovalVote[]
-  systemSettings      SystemSetting[]        @relation("SettingUpdater")
-  createdGrantRules   RoleGrantRule[]        @relation("RoleGrantRuleCreator")
-  createdAccessTiers  RoleAccessTier[]       @relation("AccessTierCreator")
-  createdRosters      Roster[]               @relation("RosterCreator")
-  rosterMemberships   RosterMembership[]     @relation("RosterMember")
+  discordIdentities     DiscordIdentity[]      @relation("IdentityOwner")
+  linkedIdentities      DiscordIdentity[]      @relation("IdentityLinker")
+  permissions           PermissionAssignment[] @relation("PermissionHolder")
+  grantedPermissions    PermissionAssignment[] @relation("PermissionGranter")
+  revokedPermissions    PermissionAssignment[] @relation("PermissionRevoker")
+  manualGrants          ManualRoleGrant[]      @relation("ManualGrantHolder")
+  issuedManualGrants    ManualRoleGrant[]      @relation("ManualGrantIssuer")
+  revokedManualGrants   ManualRoleGrant[]      @relation("ManualGrantRevoker")
+  registeredGuilds      ApprovedGuild[]        @relation("GuildRegistrar")
+  removedGuilds         ApprovedGuild[]        @relation("GuildRemover")
+  createdMappings       RoleMapping[]          @relation("MappingCreator")
+  initiatedJobs         SyncJob[]              @relation("JobInitiator")
+  syncActions           SyncAction[]           @relation("SyncActionSubject")
+  syncIssues            SyncIssue[]            @relation("IssueSubject")
+  resolvedIssues        SyncIssue[]            @relation("IssueResolver")
+  auditActions          AuditLog[]             @relation("AuditActor")
+  auditTargets          AuditLog[]             @relation("AuditTarget")
+  requestedApprovals    PendingApproval[]      @relation("ApprovalRequester")
+  resolvedApprovals     PendingApproval[]      @relation("ApprovalResolver")
+  approvalVotes         PendingApprovalVote[]
+  systemSettings        SystemSetting[]        @relation("SettingUpdater")
+  createdGrantRules     RoleGrantRule[]        @relation("RoleGrantRuleCreator")
+  createdAccessTiers    RoleAccessTier[]       @relation("AccessTierCreator")
+  createdAccessTierDefs AccessTier[]           @relation("AccessTierDefCreator")
+  createdRosters        Roster[]               @relation("RosterCreator")
+  rosterMemberships     RosterMembership[]     @relation("RosterMember")
 
   @@index([status])
   @@index([deletedAt])
@@ -247,26 +248,26 @@ model DiscordIdentity {
 /// The allowlist. A guild that is not present here (and enabled) cannot be used for
 /// anything: no commands, no mappings, no role writes.
 model ApprovedGuild {
-  id             String    @id @default(uuid()) @db.Uuid
-  discordGuildId String    @unique
-  name           String
-  type           GuildType
-  enabled        Boolean   @default(true)
-  syncEnabled    Boolean   @default(true)
+  id              String    @id @default(uuid()) @db.Uuid
+  discordGuildId  String    @unique
+  name            String
+  type            GuildType
+  enabled         Boolean   @default(true)
+  syncEnabled     Boolean   @default(true)
   /// Named feature flags, e.g. ["mappings", "manual-grants"].
-  features       String[]  @default([])
+  features        String[]  @default([])
   /// The Discord role ids that define membership in this department for the transfer
   /// portal. On a transfer these are stripped from the outgoing department and added in
   /// the incoming one. Empty on a guild that is not a transfer endpoint.
-  transferRoleIds String[] @default([])
-  notes          String?
-  registeredAt   DateTime  @default(now())
-  registeredById String?   @db.Uuid
-  removedAt      DateTime?
-  removedById    String?   @db.Uuid
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  deletedAt      DateTime?
+  transferRoleIds String[]  @default([])
+  notes           String?
+  registeredAt    DateTime  @default(now())
+  registeredById  String?   @db.Uuid
+  removedAt       DateTime?
+  removedById     String?   @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
 
   registeredBy User? @relation("GuildRegistrar", fields: [registeredById], references: [id], onDelete: Restrict)
   removedBy    User? @relation("GuildRemover", fields: [removedById], references: [id], onDelete: Restrict)
@@ -422,17 +423,51 @@ model RoleAccessTier {
   /// A role in the main community guild.
   discordRoleId   String    @unique
   roleName        String
-  /// The authority tier (0-100) holders are granted; see PermissionLevel.
-  permissionLevel Int
+  /// The legacy numeric authority tier (0-100) holders are granted; see PermissionLevel.
+  /// Null when the mapping points at a named AccessTier instead. Exactly one of
+  /// `permissionLevel` and `accessTierId` is authoritative for a given mapping.
+  permissionLevel Int?
+  /// When set, holders get exactly the named tier's capabilities (the modern path);
+  /// `permissionLevel` is then ignored. Null keeps the legacy numeric behaviour.
+  accessTierId    String?   @db.Uuid
   createdById     String?   @db.Uuid
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   deletedAt       DateTime?
 
-  createdBy User? @relation("AccessTierCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdBy  User?       @relation("AccessTierCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  accessTier AccessTier? @relation("RoleAccessTierToTier", fields: [accessTierId], references: [id], onDelete: SetNull)
 
   @@index([deletedAt])
+  @@index([accessTierId])
   @@map("role_access_tiers")
+}
+
+/// A named, reusable access tier: a plain-language bundle of capabilities an administrator
+/// defines once ("Whitelist Team", "Transfer Officers") and then maps to one or more Discord
+/// roles via RoleAccessTier. This is the modern replacement for the numeric authority levels:
+/// instead of "level 80 gets everything up to Staff", a tier grants exactly the capabilities
+/// ticked for it and nothing else - least privilege, in the community's own words.
+///
+/// A tier can never confer `access.manage`; that stays with explicitly provisioned
+/// administrators so a Discord role can never widen who gets access.
+model AccessTier {
+  id           String    @id @default(uuid()) @db.Uuid
+  /// Human name shown in the dashboard, the audit log and the bot. Unique so it reads as a label.
+  name         String    @unique
+  description  String?
+  /// Capability keys this tier confers, validated against the catalogue on every write.
+  capabilities String[]  @default([])
+  createdById  String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  createdBy    User?            @relation("AccessTierDefCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  roleMappings RoleAccessTier[] @relation("RoleAccessTierToTier")
+
+  @@index([deletedAt])
+  @@map("access_tiers")
 }
 
 // ---------------------------------------------------------------------------

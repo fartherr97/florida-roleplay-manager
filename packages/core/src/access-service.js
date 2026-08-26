@@ -20,13 +20,21 @@ import {
   ActionSource,
   AuditAction,
   CAPABILITIES,
+  CAPABILITY_MAP,
   GuildType,
   PermissionScopeType,
   UnauthenticatedError,
   ValidationError,
 } from '@frm/shared';
 import { authorize, loadActor } from '@frm/authorization';
-import { parseOrThrow, removeAccessTierSchema, setAccessTierSchema } from '@frm/validation';
+import {
+  parseOrThrow,
+  createAccessTierSchema,
+  deleteAccessTierSchema,
+  removeAccessTierSchema,
+  setAccessTierSchema,
+  updateAccessTierSchema,
+} from '@frm/validation';
 import { recordAudit } from './audit-service.js';
 
 const log = createLogger('core.access');
@@ -85,19 +93,136 @@ export function synthesizeAccessAssignments(level) {
 }
 
 /**
+ * The authority level a set of capabilities implies: the highest minimum level among them.
+ *
+ * A named tier grants an explicit list of capabilities rather than a numeric level, but the
+ * evaluator still gates every capability behind `actor.permissionLevel >= minLevel`. Setting
+ * the actor's level to the highest such minimum is exactly what lets each granted capability
+ * through - and no more, because possession is still limited to the listed capabilities.
+ *
+ * @param {Iterable<string>} capabilityKeys
+ * @returns {number}
+ */
+export function tierLevelOf(capabilityKeys) {
+  let level = 0;
+  for (const key of capabilityKeys) {
+    const definition = CAPABILITY_MAP.get(key);
+    if (definition && definition.minLevel > level) level = definition.minLevel;
+  }
+  return level;
+}
+
+/**
+ * The access a member's held roles confer, unifying both mapping styles into one result:
+ * a capability set and the authority level that set implies.
+ *
+ *   - A mapping to a named tier contributes exactly that tier's capabilities.
+ *   - A legacy numeric mapping contributes every capability up to its level (the old
+ *     behaviour), so existing installs keep working unchanged.
+ *
+ * Excluded capabilities (`access.manage`) and unknown keys are dropped defensively, so a
+ * stale or hand-edited tier can never grant more than the catalogue allows.
+ *
+ * @param {Array<{discordRoleId: string, permissionLevel?: number|null, accessTierId?: string|null}>} rules
+ * @param {Iterable<string>} heldRoleIds
+ * @param {Map<string, {capabilities: string[]}>} [tierDefsById] named-tier definitions by id
+ * @returns {{level: number, capabilities: Set<string>}}
+ */
+export function resolveTierAccess(rules, heldRoleIds, tierDefsById = new Map()) {
+  const held = heldRoleIds instanceof Set ? heldRoleIds : new Set(heldRoleIds);
+  const capabilities = new Set();
+  let level = 0;
+
+  const add = (key) => {
+    if (TIER_EXCLUDED_CAPABILITIES.has(key)) return;
+    if (!CAPABILITY_MAP.has(key)) return;
+    capabilities.add(key);
+  };
+
+  for (const rule of rules) {
+    if (!held.has(rule.discordRoleId)) continue;
+
+    if (rule.accessTierId) {
+      const def = tierDefsById.get(rule.accessTierId);
+      if (def) def.capabilities.forEach(add);
+      continue;
+    }
+
+    if (typeof rule.permissionLevel === 'number' && rule.permissionLevel > 0) {
+      level = Math.max(level, rule.permissionLevel);
+      for (const capability of CAPABILITIES) {
+        if (
+          capability.minLevel <= rule.permissionLevel &&
+          capability.allowedScopes.includes(PermissionScopeType.GLOBAL)
+        ) {
+          add(capability.key);
+        }
+      }
+    }
+  }
+
+  // Named-tier capabilities push the level up to whatever they require; legacy capabilities
+  // never exceed their own level, so the max leaves numeric mappings unchanged.
+  level = Math.max(level, tierLevelOf(capabilities));
+  return { level, capabilities };
+}
+
+/**
+ * The synthetic GLOBAL assignments for an explicit capability set. Shaped exactly like a real
+ * assignment so the evaluator treats them identically, and filtered to the capabilities that
+ * may actually be held globally.
+ *
+ * @param {Iterable<string>} capabilityKeys
+ * @returns {Array<object>}
+ */
+export function synthesizeAssignmentsFromCapabilities(capabilityKeys) {
+  const keys = capabilityKeys instanceof Set ? [...capabilityKeys] : [...(capabilityKeys ?? [])];
+  return keys
+    .filter((key) => {
+      const definition = CAPABILITY_MAP.get(key);
+      return (
+        definition &&
+        definition.allowedScopes.includes(PermissionScopeType.GLOBAL) &&
+        !TIER_EXCLUDED_CAPABILITIES.has(key)
+      );
+    })
+    .map((key) => ({
+      id: `tier:${key}`,
+      capabilityKey: key,
+      scopeType: PermissionScopeType.GLOBAL,
+      scopeId: '',
+      maxPermissionLevel: null,
+    }));
+}
+
+/**
  * Returns a copy of the actor raised to the given tier: its authority level lifted (so the
- * ceiling checks use the tier) and the synthesized assignments appended. A tier of zero, or
- * no actor, is returned unchanged.
+ * ceiling checks use the tier) and the synthesized assignments appended. Nothing to add - a
+ * tier of zero with no capabilities, or no actor - is returned unchanged.
+ *
+ * Accepts either a plain numeric level (the legacy path, still used by the tests and the
+ * numeric `/access` command) or a resolved `{level, capabilities}` object (the unified path).
+ * With capabilities the actor gets exactly those; with a bare level it gets every capability
+ * up to it.
  *
  * @param {import('@frm/authorization').ActorSnapshot} actor
- * @param {number} level
+ * @param {number|{level: number, capabilities: Iterable<string>}} access
  */
-export function augmentActorWithTier(actor, level) {
-  if (!actor || !level || level <= 0) return actor;
+export function augmentActorWithTier(actor, access) {
+  if (!actor) return actor;
+  const level = typeof access === 'number' ? access : (access?.level ?? 0);
+  const capabilities = typeof access === 'number' ? null : (access?.capabilities ?? null);
+
+  const assignments = capabilities
+    ? synthesizeAssignmentsFromCapabilities(capabilities)
+    : synthesizeAccessAssignments(level);
+
+  if (assignments.length === 0 && level <= 0) return actor;
+
   return {
     ...actor,
     user: { ...actor.user, permissionLevel: Math.max(actor.user.permissionLevel, level) },
-    assignments: [...actor.assignments, ...synthesizeAccessAssignments(level)],
+    assignments: [...actor.assignments, ...assignments],
     tierLevel: level,
   };
 }
@@ -106,38 +231,55 @@ export function augmentActorWithTier(actor, level) {
 // Live resolution - the entry point the bot guard calls.
 // ---------------------------------------------------------------------------
 
+/** No access: the neutral result every degraded path returns. */
+const NO_ACCESS = Object.freeze({ level: 0, capabilities: new Set() });
+
+/** Loads the named-tier definitions as a map keyed by id, for resolution. */
+async function loadTierDefsById(prisma) {
+  const tiers = await prisma.accessTier.findMany({
+    where: notDeleted,
+    select: { id: true, capabilities: true },
+  });
+  return new Map(tiers.map((tier) => [tier.id, { capabilities: tier.capabilities }]));
+}
+
 /**
- * The member's tier from their live main-guild roles, or 0 if there is nothing to apply.
+ * The access a member gets from their live main-guild roles: `{level, capabilities}`, or
+ * `NO_ACCESS` if there is nothing to apply.
  *
  * Access tiers are additive and optional, and this runs inside the command guard for *every*
  * command - so it must never be the thing that fails one. Any error (most importantly the
- * `role_access_tiers` table not existing yet, before the migration is applied) degrades to
- * "no tier" rather than propagating and breaking the whole bot.
+ * `role_access_tiers`/`access_tiers` tables not existing yet, before the migration is applied)
+ * degrades to "no access" rather than propagating and breaking the whole bot.
  */
-export async function resolveTierLevelForMember({ discordUserId, gateway, prisma }) {
+export async function resolveTierAccessForMember({ discordUserId, gateway, prisma }) {
   try {
     const mainGuild = await prisma.approvedGuild.findFirst({
       where: { type: GuildType.MAIN_COMMUNITY, enabled: true, ...notDeleted },
     });
-    if (!mainGuild) return 0;
+    if (!mainGuild) return NO_ACCESS;
 
     const rules = await prisma.roleAccessTier.findMany({
       where: notDeleted,
-      select: { discordRoleId: true, permissionLevel: true },
+      select: { discordRoleId: true, permissionLevel: true, accessTierId: true },
     });
-    if (rules.length === 0 || !gateway) return 0;
+    if (rules.length === 0 || !gateway) return NO_ACCESS;
 
     const member = await gateway
       .getMember(mainGuild.discordGuildId, discordUserId)
       .catch(() => null);
-    if (!member) return 0;
-    return resolveTierLevel(rules, member.roleIds);
+    if (!member) return NO_ACCESS;
+
+    const tierDefsById = rules.some((rule) => rule.accessTierId)
+      ? await loadTierDefsById(prisma)
+      : new Map();
+    return resolveTierAccess(rules, member.roleIds, tierDefsById);
   } catch (error) {
     log.error(
       { err: serializeError(error), discordUserId },
       'could not resolve access tier; treating as none',
     );
-    return 0;
+    return NO_ACCESS;
   }
 }
 
@@ -197,11 +339,12 @@ async function provisionMember({ discordUserId, displayName, prisma }) {
  */
 export async function resolveDiscordActor({ discordUserId, displayName, gateway, prisma } = {}) {
   const db = prisma ?? getPrisma();
-  const level = await resolveTierLevelForMember({ discordUserId, gateway, prisma: db });
+  const access = await resolveTierAccessForMember({ discordUserId, gateway, prisma: db });
+  const hasAccess = access.level > 0 || access.capabilities.size > 0;
 
   let actor = await loadActor({ discordUserId, prisma: db, required: false });
   if (!actor) {
-    if (level <= 0) {
+    if (!hasAccess) {
       throw new UnauthenticatedError(
         'Your Discord account is not linked to a platform account, and you do not hold a role ' +
           'that grants access. Ask an administrator to link your account.',
@@ -211,9 +354,9 @@ export async function resolveDiscordActor({ discordUserId, displayName, gateway,
     actor = await loadActor({ userId: user.id, prisma: db, required: true });
   }
 
-  await syncWebsiteAccess({ user: actor.user, level, prisma: db });
+  await syncWebsiteAccess({ user: actor.user, access, prisma: db });
 
-  return augmentActorWithTier(actor, level);
+  return augmentActorWithTier(actor, access);
 }
 
 /**
@@ -234,8 +377,16 @@ export async function resolveDiscordActor({ discordUserId, displayName, gateway,
  * no tier is somebody's deliberate decision, and a tier sweep is not the place to override
  * it - so only access this function granted is taken back.
  */
-export async function syncWebsiteAccess({ user, level, prisma = getPrisma() }) {
-  const shouldHave = level > 0;
+export async function syncWebsiteAccess({ user, access, level, prisma = getPrisma() }) {
+  // Accept either a resolved `{level, capabilities}` object or a bare numeric level (the
+  // legacy signature). Any capability at all, even a low-level one, grants website access.
+  const resolvedLevel = access ? access.level : (level ?? 0);
+  const capabilityCount = access?.capabilities
+    ? access.capabilities instanceof Set
+      ? access.capabilities.size
+      : access.capabilities.length
+    : 0;
+  const shouldHave = resolvedLevel > 0 || capabilityCount > 0;
   if (user.websiteAccess === shouldHave) return { changed: false };
 
   // Granting is unconditional; revoking only undoes a grant that came from a tier.
@@ -253,7 +404,7 @@ export async function syncWebsiteAccess({ user, level, prisma = getPrisma() }) {
     reason: shouldHave
       ? 'Holds a Discord role mapped to an access tier'
       : 'No longer holds a Discord role mapped to an access tier',
-    newState: { websiteAccess: shouldHave, tierLevel: level },
+    newState: { websiteAccess: shouldHave, tierLevel: resolvedLevel },
   }).catch(() => {});
 
   log.info({ userId: user.id, websiteAccess: shouldHave }, 'website access updated from tier');
@@ -278,31 +429,35 @@ export async function reconcileWebsiteAccess({ gateway, prisma = getPrisma() }) 
 
   const rules = await prisma.roleAccessTier.findMany({
     where: notDeleted,
-    select: { discordRoleId: true, permissionLevel: true },
+    select: { discordRoleId: true, permissionLevel: true, accessTierId: true },
   });
   if (rules.length === 0) return { checked: 0, changed: 0 };
+
+  const tierDefsById = rules.some((rule) => rule.accessTierId)
+    ? await loadTierDefsById(prisma)
+    : new Map();
 
   const members = await gateway.listMembers(mainGuild.discordGuildId).catch((error) => {
     log.error({ err: serializeError(error) }, 'could not list main guild for access sweep');
     return [];
   });
-  const levelByDiscordId = new Map(
-    members.map((member) => [member.id, resolveTierLevel(rules, member.roleIds)]),
+  const accessByDiscordId = new Map(
+    members.map((member) => [member.id, resolveTierAccess(rules, member.roleIds, tierDefsById)]),
   );
 
   // Everybody the platform knows about who either holds access now or might gain it.
   const users = await prisma.user.findMany({
     where: {
       ...notDeleted,
-      OR: [{ websiteAccess: true }, { primaryDiscordId: { in: [...levelByDiscordId.keys()] } }],
+      OR: [{ websiteAccess: true }, { primaryDiscordId: { in: [...accessByDiscordId.keys()] } }],
     },
     select: { id: true, primaryDiscordId: true, websiteAccess: true, accessFromTier: true },
   });
 
   let changed = 0;
   for (const user of users) {
-    const level = levelByDiscordId.get(user.primaryDiscordId ?? '') ?? 0;
-    const result = await syncWebsiteAccess({ user, level, prisma }).catch((error) => {
+    const access = accessByDiscordId.get(user.primaryDiscordId ?? '') ?? NO_ACCESS;
+    const result = await syncWebsiteAccess({ user, access, prisma }).catch((error) => {
       log.error({ err: serializeError(error), userId: user.id }, 'website access sync failed');
       return { changed: false };
     });
@@ -340,42 +495,211 @@ async function requireMainGuildContext(ctx, prisma) {
   return mainGuild;
 }
 
-/** Lists the configured role -> tier rules, highest tier first. */
+/**
+ * The capabilities an administrator may put in a tier, in plain language, grouped by area.
+ *
+ * Sourced from the static catalogue rather than the database, so the tier editor works for
+ * whoever holds `access.manage` without also needing `permission.view`. `access.manage` is
+ * never offered - a tier can never widen who gets access.
+ */
+export async function listSelectableCapabilities(ctx) {
+  authorize(ctx.actor, { capability: 'access.manage', scope: {} });
+  return CAPABILITIES.filter(
+    (capability) =>
+      !TIER_EXCLUDED_CAPABILITIES.has(capability.key) &&
+      capability.allowedScopes.includes(PermissionScopeType.GLOBAL),
+  ).map((capability) => ({
+    key: capability.key,
+    category: capability.category,
+    description: capability.description,
+    dangerous: capability.dangerous,
+    minLevel: capability.minLevel,
+  }));
+}
+
+/** Lists the named access tiers, with how many roles each is mapped to. */
+export async function listTiers(ctx) {
+  authorize(ctx.actor, { capability: 'access.manage', scope: {} });
+  const prisma = ctx.prisma ?? getPrisma();
+  const tiers = await prisma.accessTier.findMany({
+    where: notDeleted,
+    orderBy: [{ name: 'asc' }],
+    include: { _count: { select: { roleMappings: { where: notDeleted } } } },
+  });
+  return tiers.map((tier) => ({
+    id: tier.id,
+    name: tier.name,
+    description: tier.description,
+    capabilities: tier.capabilities,
+    roleCount: tier._count.roleMappings,
+    createdAt: tier.createdAt,
+    updatedAt: tier.updatedAt,
+  }));
+}
+
+/** Creates a named access tier. */
+export async function createTier(ctx, input) {
+  const data = parseOrThrow(createAccessTierSchema, input);
+  authorize(ctx.actor, { capability: 'access.manage', scope: {} });
+  const prisma = ctx.prisma ?? getPrisma();
+
+  const capabilities = [...new Set(data.capabilities)];
+  let tier;
+  try {
+    tier = await prisma.accessTier.create({
+      data: {
+        name: data.name,
+        description: data.description ?? null,
+        capabilities,
+        createdById: ctx.actor?.user?.id ?? null,
+      },
+    });
+  } catch (error) {
+    if (error?.code === 'P2002') {
+      throw new ValidationError(`A tier named "${data.name}" already exists.`);
+    }
+    throw error;
+  }
+
+  await recordAudit(prisma, {
+    ctx,
+    action: AuditAction.ACCESS_TIER_SET,
+    reason: data.reason,
+    newState: { tierId: tier.id, name: tier.name, capabilities },
+  });
+
+  log.info({ tierId: tier.id, name: tier.name }, 'named access tier created');
+  return tier;
+}
+
+/** Edits a named access tier. Role mappings that point at it pick up the change live. */
+export async function updateTier(ctx, input) {
+  const data = parseOrThrow(updateAccessTierSchema, input);
+  authorize(ctx.actor, { capability: 'access.manage', scope: {} });
+  const prisma = ctx.prisma ?? getPrisma();
+
+  const existing = await prisma.accessTier.findFirst({ where: { id: data.id, ...notDeleted } });
+  if (!existing) throw new ValidationError('That access tier no longer exists.');
+
+  const patch = {};
+  if (data.name !== undefined) patch.name = data.name;
+  if (data.description !== undefined) patch.description = data.description;
+  if (data.capabilities !== undefined) patch.capabilities = [...new Set(data.capabilities)];
+
+  let tier;
+  try {
+    tier = await prisma.accessTier.update({ where: { id: existing.id }, data: patch });
+  } catch (error) {
+    if (error?.code === 'P2002') {
+      throw new ValidationError(`A tier named "${data.name}" already exists.`);
+    }
+    throw error;
+  }
+
+  await recordAudit(prisma, {
+    ctx,
+    action: AuditAction.ACCESS_TIER_SET,
+    reason: data.reason,
+    previousState: {
+      name: existing.name,
+      description: existing.description,
+      capabilities: existing.capabilities,
+    },
+    newState: { tierId: tier.id, name: tier.name, capabilities: tier.capabilities },
+  });
+
+  log.info({ tierId: tier.id, name: tier.name }, 'named access tier updated');
+  return tier;
+}
+
+/**
+ * Deletes a named access tier. Any role mappings that point at it are cleared in the same
+ * transaction, so a member never keeps access from a tier that no longer exists (the FK is
+ * `SET NULL`, which would otherwise leave a mapping with neither a tier nor a level).
+ */
+export async function deleteTier(ctx, input) {
+  const data = parseOrThrow(deleteAccessTierSchema, input);
+  authorize(ctx.actor, { capability: 'access.manage', scope: {} });
+  const prisma = ctx.prisma ?? getPrisma();
+
+  const existing = await prisma.accessTier.findFirst({ where: { id: data.id, ...notDeleted } });
+  if (!existing) return { removed: false };
+
+  await prisma.$transaction([
+    prisma.roleAccessTier.updateMany({
+      where: { accessTierId: existing.id, ...notDeleted },
+      data: { deletedAt: new Date() },
+    }),
+    prisma.accessTier.update({ where: { id: existing.id }, data: { deletedAt: new Date() } }),
+  ]);
+
+  await recordAudit(prisma, {
+    ctx,
+    action: AuditAction.ACCESS_TIER_REMOVED,
+    reason: data.reason,
+    previousState: { tierId: existing.id, name: existing.name },
+  });
+
+  log.info({ tierId: existing.id, name: existing.name }, 'named access tier deleted');
+  return { removed: true };
+}
+
+/** Lists the configured role -> access rules, named tiers included. */
 export async function listAccessTiers(ctx) {
   authorize(ctx.actor, { capability: 'access.manage', scope: {} });
   const prisma = ctx.prisma ?? getPrisma();
-  return prisma.roleAccessTier.findMany({
+  const rules = await prisma.roleAccessTier.findMany({
     where: notDeleted,
     orderBy: [{ permissionLevel: 'desc' }, { roleName: 'asc' }],
+    include: {
+      accessTier: { select: { id: true, name: true, capabilities: true, deletedAt: true } },
+    },
   });
+  // A tier soft-deleted out from under a mapping should read as "no tier", not a dangling name.
+  return rules.map((rule) => ({
+    ...rule,
+    accessTier: rule.accessTier && !rule.accessTier.deletedAt ? rule.accessTier : null,
+  }));
 }
 
-/** Maps a main-guild role to an authority tier (creating or updating the rule). */
+/**
+ * Maps a main-guild role to access: either a named tier (`accessTierId`) or a legacy numeric
+ * `level`. The two are mutually exclusive, enforced by the schema; whichever is set becomes
+ * authoritative and the other column is cleared.
+ */
 export async function setAccessTier(ctx, input) {
   const data = parseOrThrow(setAccessTierSchema, input);
   authorize(ctx.actor, { capability: 'access.manage', scope: {} });
   const prisma = ctx.prisma ?? getPrisma();
   await requireMainGuildContext(ctx, prisma);
 
+  // A named mapping must reference a real, live tier.
+  if (data.accessTierId) {
+    const tier = await prisma.accessTier.findFirst({
+      where: { id: data.accessTierId, ...notDeleted },
+    });
+    if (!tier) throw new ValidationError('That access tier no longer exists.');
+  }
+
   const existing = await prisma.roleAccessTier.findUnique({
     where: { discordRoleId: data.discordRoleId },
   });
-  const previous = existing && !existing.deletedAt ? { level: existing.permissionLevel } : null;
+  const previous =
+    existing && !existing.deletedAt
+      ? { level: existing.permissionLevel, accessTierId: existing.accessTierId }
+      : null;
+
+  const fields = {
+    roleName: data.roleName,
+    permissionLevel: data.accessTierId ? null : data.level,
+    accessTierId: data.accessTierId ?? null,
+    createdById: ctx.actor?.user?.id ?? null,
+  };
 
   const row = await prisma.roleAccessTier.upsert({
     where: { discordRoleId: data.discordRoleId },
-    create: {
-      discordRoleId: data.discordRoleId,
-      roleName: data.roleName,
-      permissionLevel: data.level,
-      createdById: ctx.actor?.user?.id ?? null,
-    },
-    update: {
-      roleName: data.roleName,
-      permissionLevel: data.level,
-      deletedAt: null,
-      createdById: ctx.actor?.user?.id ?? null,
-    },
+    create: { discordRoleId: data.discordRoleId, ...fields },
+    update: { ...fields, deletedAt: null },
   });
 
   await recordAudit(prisma, {
@@ -383,10 +707,18 @@ export async function setAccessTier(ctx, input) {
     action: AuditAction.ACCESS_TIER_SET,
     reason: data.reason,
     previousState: previous,
-    newState: { discordRoleId: data.discordRoleId, roleName: data.roleName, level: data.level },
+    newState: {
+      discordRoleId: data.discordRoleId,
+      roleName: data.roleName,
+      level: data.level ?? null,
+      accessTierId: data.accessTierId ?? null,
+    },
   });
 
-  log.info({ discordRoleId: data.discordRoleId, level: data.level }, 'access tier set');
+  log.info(
+    { discordRoleId: data.discordRoleId, level: data.level ?? null, accessTierId: data.accessTierId ?? null },
+    'access tier set',
+  );
   return row;
 }
 

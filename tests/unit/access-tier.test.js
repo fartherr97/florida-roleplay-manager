@@ -10,8 +10,11 @@ import { describe, expect, it } from 'vitest';
 import {
   augmentActorWithTier,
   resolveDiscordActor,
+  resolveTierAccess,
   resolveTierLevel,
   synthesizeAccessAssignments,
+  synthesizeAssignmentsFromCapabilities,
+  tierLevelOf,
 } from '@frm/core';
 import { evaluate } from '@frm/authorization';
 
@@ -81,6 +84,67 @@ describe('augmentActorWithTier', () => {
   it('never lowers an existing higher authority level', () => {
     const actor = { ...baseActor(), user: { ...baseActor().user, permissionLevel: 100 } };
     expect(augmentActorWithTier(actor, 40).user.permissionLevel).toBe(100);
+  });
+});
+
+describe('named tiers (capability sets)', () => {
+  const TIER_ID = 'tier-whitelist';
+  const tierDefs = new Map([
+    // A tier that can approve whitelist submissions (member.link, minLevel STAFF=80) and look
+    // members up (member.view, minLevel MEMBER=0). access.manage is never allowed in.
+    [TIER_ID, { capabilities: ['member.link', 'member.view', 'access.manage'] }],
+  ]);
+  const namedRules = [{ discordRoleId: 'wl', accessTierId: TIER_ID }];
+
+  it('tierLevelOf takes the highest minimum level among the capabilities', () => {
+    expect(tierLevelOf(['member.view'])).toBe(0);
+    expect(tierLevelOf(['member.view', 'member.link'])).toBe(80); // member.link is STAFF
+    expect(tierLevelOf([])).toBe(0);
+  });
+
+  it('resolves exactly the tier capabilities, dropping the excluded ones', () => {
+    const { level, capabilities } = resolveTierAccess(namedRules, ['wl'], tierDefs);
+    expect(capabilities.has('member.link')).toBe(true);
+    expect(capabilities.has('member.view')).toBe(true);
+    expect(capabilities.has('access.manage')).toBe(false); // withheld even when listed
+    expect(level).toBe(80); // implied by member.link
+  });
+
+  it('is empty when the held role maps to no tier', () => {
+    const { level, capabilities } = resolveTierAccess(namedRules, ['other'], tierDefs);
+    expect(level).toBe(0);
+    expect(capabilities.size).toBe(0);
+  });
+
+  it('unions named and legacy mappings, taking the highest level', () => {
+    const rules = [
+      { discordRoleId: 'wl', accessTierId: TIER_ID }, // member.link/view, level 80
+      { discordRoleId: 'supervisor', permissionLevel: 20 }, // everything up to 20
+    ];
+    const { level, capabilities } = resolveTierAccess(rules, ['wl', 'supervisor'], tierDefs);
+    expect(level).toBe(80);
+    expect(capabilities.has('member.link')).toBe(true); // from the named tier
+    expect(capabilities.has('sync.member')).toBe(true); // from the level-20 legacy mapping
+  });
+
+  it('grants only the listed capabilities through the real evaluator', () => {
+    const { level, capabilities } = resolveTierAccess(namedRules, ['wl'], tierDefs);
+    const actor = augmentActorWithTier(baseActor(), { level, capabilities });
+
+    // Possesses member.link and clears its STAFF minimum.
+    expect(evaluate(actor, { capability: 'member.link', scope: {} }).allowed).toBe(true);
+    // Level is 80, but it never possesses mapping.create, so it cannot run it - least privilege.
+    expect(evaluate(actor, { capability: 'mapping.create', scope: {} }).allowed).toBe(false);
+    // access.manage is never grantable by a tier.
+    expect(evaluate(actor, { capability: 'access.manage', scope: {} }).allowed).toBe(false);
+  });
+
+  it('synthesizes GLOBAL, uncapped assignments from a capability set', () => {
+    const assignments = synthesizeAssignmentsFromCapabilities(new Set(['member.link', 'access.manage']));
+    expect(assignments.map((a) => a.capabilityKey)).toEqual(['member.link']); // excluded key dropped
+    expect(assignments.every((a) => a.scopeType === 'GLOBAL' && a.maxPermissionLevel === null)).toBe(
+      true,
+    );
   });
 });
 

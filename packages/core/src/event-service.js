@@ -38,7 +38,7 @@ import { systemContext } from './context.js';
 import { createSyncJob, enqueueSyncJob } from './sync-service.js';
 import { findApprovedGuildBySnowflake } from './resolve.js';
 import { queueRosterSync } from './roster-service.js';
-import { resolveTierLevelForMember, syncWebsiteAccess } from './access-service.js';
+import { resolveTierAccessForMember, syncWebsiteAccess } from './access-service.js';
 import { notifyGlobalAdmins } from './notify.js';
 
 const log = createLogger('core.events');
@@ -238,8 +238,8 @@ async function syncWebsiteAccessForRoleChange({ prisma, guild, discordUserId, ro
   const actor = await loadActor({ discordUserId, prisma, required: false });
   if (!actor) return;
 
-  const level = await resolveTierLevelForMember({ discordUserId, gateway, prisma });
-  await syncWebsiteAccess({ user: actor.user, level, prisma });
+  const access = await resolveTierAccessForMember({ discordUserId, gateway, prisma });
+  await syncWebsiteAccess({ user: actor.user, access, prisma });
 }
 
 /**
