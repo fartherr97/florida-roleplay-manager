@@ -263,11 +263,17 @@ const tierCapability = z.enum(tierCapabilityKeys);
 const tierName = z.string().trim().min(1).max(60);
 const tierDescription = z.string().trim().max(300).optional();
 const tierCapabilities = z.array(tierCapability).min(1).max(tierCapabilityKeys.length);
+/** A 6-digit hex colour like #22c55e. */
+const tierColor = z
+  .string()
+  .trim()
+  .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour like #22c55e');
 
 /** Define a new named access tier. */
 export const createAccessTierSchema = z.object({
   name: tierName,
   description: tierDescription,
+  color: tierColor.optional(),
   capabilities: tierCapabilities,
   reason: optionalReason,
 });
@@ -278,6 +284,7 @@ export const updateAccessTierSchema = z
     id: uuid,
     name: tierName.optional(),
     description: z.string().trim().max(300).nullable().optional(),
+    color: tierColor.nullable().optional(),
     capabilities: tierCapabilities.optional(),
     reason: optionalReason,
   })
@@ -285,6 +292,7 @@ export const updateAccessTierSchema = z
     (value) =>
       value.name !== undefined ||
       value.description !== undefined ||
+      value.color !== undefined ||
       value.capabilities !== undefined,
     'Nothing to update',
   );

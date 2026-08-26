@@ -530,6 +530,7 @@ export async function listTiers(ctx) {
     id: tier.id,
     name: tier.name,
     description: tier.description,
+    color: tier.color,
     capabilities: tier.capabilities,
     roleCount: tier._count.roleMappings,
     createdAt: tier.createdAt,
@@ -550,6 +551,7 @@ export async function createTier(ctx, input) {
       data: {
         name: data.name,
         description: data.description ?? null,
+        color: data.color ?? null,
         capabilities,
         createdById: ctx.actor?.user?.id ?? null,
       },
@@ -584,6 +586,7 @@ export async function updateTier(ctx, input) {
   const patch = {};
   if (data.name !== undefined) patch.name = data.name;
   if (data.description !== undefined) patch.description = data.description;
+  if (data.color !== undefined) patch.color = data.color;
   if (data.capabilities !== undefined) patch.capabilities = [...new Set(data.capabilities)];
 
   let tier;
@@ -652,7 +655,9 @@ export async function listAccessTiers(ctx) {
     where: notDeleted,
     orderBy: [{ permissionLevel: 'desc' }, { roleName: 'asc' }],
     include: {
-      accessTier: { select: { id: true, name: true, capabilities: true, deletedAt: true } },
+      accessTier: {
+        select: { id: true, name: true, color: true, capabilities: true, deletedAt: true },
+      },
     },
   });
   // A tier soft-deleted out from under a mapping should read as "no tier", not a dangling name.

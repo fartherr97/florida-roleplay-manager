@@ -456,6 +456,8 @@ model AccessTier {
   /// Human name shown in the dashboard, the audit log and the bot. Unique so it reads as a label.
   name         String    @unique
   description  String?
+  /// Optional display colour (hex, e.g. #22c55e) shown as the tier's badge.
+  color        String?
   /// Capability keys this tier confers, validated against the catalogue on every write.
   capabilities String[]  @default([])
   createdById  String?   @db.Uuid
