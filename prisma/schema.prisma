@@ -883,3 +883,29 @@ model WhitelistSubmission {
   @@index([status])
   @@map("whitelist_submissions")
 }
+
+/// A community-wide ban with an expiry, set by /globalban with a duration.
+///
+/// The ban itself lives in Discord (one ban per guild); this row is only the timer and
+/// the record. A maintenance sweep lifts the ban everywhere once `expiresAt` passes and
+/// flips `active` off; a manual /globalunban does the same immediately. A permanent ban
+/// writes no row here — it never needs lifting.
+model TimedBan {
+  id            String    @id @default(uuid()) @db.Uuid
+  discordUserId String
+  reason        String?
+  /// A readable label for who set it (the moderator), for the log and the record.
+  bannedByLabel String?
+  bannedById    String?   @db.Uuid
+  expiresAt     DateTime
+  active        Boolean   @default(true)
+  liftedAt      DateTime?
+  /// 'expired' when the sweep lifted it, 'manual' when a /globalunban did.
+  liftedReason  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([active, expiresAt])
+  @@index([discordUserId])
+  @@map("timed_bans")
+}

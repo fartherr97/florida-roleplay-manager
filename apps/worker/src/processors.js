@@ -12,6 +12,7 @@ import {
   runScheduledReconciliation,
   runScheduledRosterSweep,
   runSyncJob,
+  runTimedBanExpiry,
   runTransferJob,
   validateManagedRoles,
 } from '@frm/core';
@@ -97,6 +98,11 @@ export function createMaintenanceProcessor({ gateway }) {
           log.error({ err: serializeError(error) }, 'website access sweep failed');
         });
         return { syncJobId: result?.id, status: result?.status };
+      }
+
+      case JobName.EXPIRE_TIMED_BANS: {
+        // Lift any temp ban whose time has passed. Cheap when nothing is due.
+        return runTimedBanExpiry({ gateway, prisma });
       }
 
       default:

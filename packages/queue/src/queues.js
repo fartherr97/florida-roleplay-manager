@@ -28,6 +28,7 @@ export const JobName = Object.freeze({
   ROLE_ACTION_RETRY: 'role-action-retry',
   SCHEDULED_RECONCILIATION: 'scheduled-reconciliation',
   MAPPING_VALIDATION: 'mapping-validation',
+  EXPIRE_TIMED_BANS: 'expire-timed-bans',
   ROSTER_MEMBER_SYNC: 'roster-member-sync',
   ROSTER_SYNC: 'roster-sync',
   TRANSFER_EXECUTE: 'transfer-execute',
@@ -43,6 +44,7 @@ const QUEUE_FOR_JOB = Object.freeze({
   [JobName.ROLE_ACTION_RETRY]: QUEUE_NAMES.ROLE_ACTION,
   [JobName.SCHEDULED_RECONCILIATION]: QUEUE_NAMES.MAINTENANCE,
   [JobName.MAPPING_VALIDATION]: QUEUE_NAMES.MAINTENANCE,
+  [JobName.EXPIRE_TIMED_BANS]: QUEUE_NAMES.MAINTENANCE,
   // Roster work gets its own queue rather than sharing the sync queue: a roster bug
   // then cannot starve or stall role synchronization, and vice versa.
   [JobName.ROSTER_MEMBER_SYNC]: QUEUE_NAMES.ROSTER,
@@ -141,6 +143,15 @@ export async function scheduleMaintenanceJobs() {
     'mapping-validation',
     { pattern: env.MAPPING_VALIDATION_CRON },
     { name: JobName.MAPPING_VALIDATION, data: { scheduled: true } },
+  );
+
+  // Lift expired temp bans promptly. A minute of granularity is plenty — a ban set for
+  // "6h" lifting up to a minute late is invisible — and the sweep is a cheap indexed
+  // query that does nothing when no ban is due.
+  await queue.upsertJobScheduler(
+    'expire-timed-bans',
+    { every: 60_000 },
+    { name: JobName.EXPIRE_TIMED_BANS, data: { scheduled: true } },
   );
 
   log.info(
