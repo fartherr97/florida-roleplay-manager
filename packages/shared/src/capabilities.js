@@ -330,6 +330,114 @@ const DEFINITIONS = [
   },
 ];
 
+/**
+ * The slash commands each capability unlocks, in plain language.
+ *
+ * Access is enforced by capability, but "guild.settings" means little to somebody deciding
+ * what a tier should be able to do — "/guild settings" and a one-liner does. This is the
+ * human face of the catalogue, shown on the website's access-tier editor. Keyed by
+ * capability; a capability with no slash command (the website-only transfer portal) lists
+ * where it applies instead.
+ */
+const COMMANDS_BY_CAPABILITY = {
+  'guild.view': [
+    { name: '/guild list', description: 'List the registered servers.' },
+    { name: '/guild status', description: "Show a server's registration and sync status." },
+  ],
+  'guild.register': [{ name: '/guild register', description: 'Add a server to the allowlist.' }],
+  'guild.remove': [{ name: '/guild remove', description: 'Remove a server from the allowlist.' }],
+  'guild.settings': [{ name: '/guild settings', description: "Change a server's sync and auto-leave settings." }],
+  'guild.provision': [
+    { name: '/setup department', description: "Provision a department server's channels and roles." },
+    { name: '/setup community', description: 'Provision the community server.' },
+    { name: '/setup permissions', description: "Repair the bot's own channel permissions." },
+  ],
+  'mapping.view': [
+    { name: '/mapping list', description: 'List role mappings.' },
+    { name: '/mapping view', description: 'Show one mapping in detail.' },
+  ],
+  'mapping.create': [{ name: '/mapping create', description: 'Create a role mapping between two servers.' }],
+  'mapping.update': [
+    { name: '/mapping edit', description: 'Edit a mapping.' },
+    { name: '/mapping enable', description: 'Enable a mapping.' },
+    { name: '/mapping disable', description: 'Disable a mapping.' },
+  ],
+  'mapping.delete': [{ name: '/mapping remove', description: 'Delete a mapping.' }],
+  'mapping.test': [{ name: '/mapping test', description: 'Preview what a mapping would do.' }],
+  'mapping.approve': [
+    { name: '/mapping approvals', description: 'List mappings awaiting a second approver.' },
+    { name: '/mapping approve', description: 'Approve a mapping change.' },
+    { name: '/mapping reject', description: 'Reject a mapping change.' },
+  ],
+  'role.manage': [
+    { name: '/role manage', description: 'Declare a Discord role as managed by the platform.' },
+    { name: '/role unmanage', description: 'Stop managing a role.' },
+    { name: '/role list', description: 'List managed roles.' },
+  ],
+  'grant.issue': [
+    { name: '/role grant', description: 'Give a member a time-bounded manual role grant.' },
+    { name: '/role grants', description: 'List active manual grants.' },
+  ],
+  'grant.revoke': [{ name: '/role revoke', description: 'Revoke a manual role grant.' }],
+  'rolegrant.manage': [
+    { name: '/rolemanager config', description: 'Set which roles may hand out which other roles.' },
+    { name: '/rolemanager view', description: 'See the self-service role rules.' },
+  ],
+  'member.view': [{ name: '/member lookup', description: "Look up a member's profile and access." }],
+  'member.link': [
+    { name: '/member link', description: 'Link a Discord account to a platform member.' },
+    { name: '/member unlink', description: 'Unlink a Discord account.' },
+  ],
+  'sync.member': [
+    { name: '/resync member', description: "Resynchronise one member's roles." },
+    { name: '/resync preview', description: 'Preview what a resync would change.' },
+    { name: '/resync status', description: "Check a sync job's status." },
+  ],
+  'sync.guild': [{ name: '/resync guild', description: 'Resynchronise every managed member of a server.' }],
+  'sync.global': [{ name: '/resync all', description: 'Resynchronise the entire platform.' }],
+  'sync.issue.retry': [{ name: '/audit retry', description: 'Retry a failed sync action.' }],
+  'audit.view': [
+    { name: '/audit recent', description: 'Show recent actions.' },
+    { name: '/audit failures', description: 'Show failed actions.' },
+    { name: '/audit member', description: "Show a member's audit history." },
+    { name: '/audit mapping', description: "Show a mapping's audit history." },
+  ],
+  'roster.view': [
+    { name: '/roster view', description: 'Show a roster.' },
+    { name: '/roster list', description: 'List every roster.' },
+  ],
+  'roster.manage': [
+    { name: '/roster create', description: 'Create a roster.' },
+    { name: '/roster rank', description: 'Bind a Discord role to a rank.' },
+    { name: '/roster unrank', description: 'Unbind a rank.' },
+    { name: '/roster publish', description: 'Publish or unpublish a roster to the website.' },
+  ],
+  'roster.member': [
+    { name: '/roster member', description: "Set a member's callsign or displayed name." },
+    { name: '/globalsetnickname', description: "Set a member's display name in every server." },
+  ],
+  'roster.sync': [{ name: '/roster sync', description: 'Reconcile a roster against Discord.' }],
+  'system.manage': [
+    { name: '/globalban', description: 'Ban a user from every registered server.' },
+    { name: '/globalunban', description: "Lift a user's ban in every server." },
+    { name: '/system health', description: 'Show platform health.' },
+  ],
+  'permission.view': [{ name: '/permissions view', description: 'See who holds which capabilities.' }],
+  'permission.grant': [{ name: '/permissions grant', description: 'Grant a capability to a member.' }],
+  'permission.revoke': [{ name: '/permissions revoke', description: 'Revoke a capability from a member.' }],
+  'transfer.manage': [
+    { name: 'Transfer portal (website)', description: "Configure each department's transfer role set." },
+  ],
+  'transfer.execute': [
+    { name: 'Transfer portal (website)', description: 'Move a member between departments.' },
+  ],
+};
+
+// Attach the command list to each definition, so every export below carries it.
+for (const def of DEFINITIONS) {
+  def.commands = COMMANDS_BY_CAPABILITY[def.key] ?? [];
+}
+
 /** @type {ReadonlyMap<string, CapabilityDefinition>} */
 export const CAPABILITY_MAP = new Map(DEFINITIONS.map((def) => [def.key, Object.freeze(def)]));
 

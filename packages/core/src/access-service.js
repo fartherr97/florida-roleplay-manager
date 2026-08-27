@@ -514,6 +514,8 @@ export async function listSelectableCapabilities(ctx) {
     description: capability.description,
     dangerous: capability.dangerous,
     minLevel: capability.minLevel,
+    // The slash commands this capability unlocks, for the website's access-tier editor.
+    commands: capability.commands ?? [],
   }));
 }
 
