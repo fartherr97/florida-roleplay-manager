@@ -239,6 +239,8 @@ export const AuditAction = Object.freeze({
   MEMBER_AUTO_PROVISIONED: 'member.auto_provisioned',
   MEMBER_GLOBAL_BANNED: 'member.global_banned',
   MEMBER_GLOBAL_UNBANNED: 'member.global_unbanned',
+  MEMBER_ROLE_TEMP_ADDED: 'member.role_temp_added',
+  MEMBER_ROLE_TEMP_REMOVED: 'member.role_temp_removed',
 
   ACCESS_TIER_SET: 'access.tier_set',
   ACCESS_TIER_REMOVED: 'access.tier_removed',

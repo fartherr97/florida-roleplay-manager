@@ -20,6 +20,7 @@ import * as roster from './roster.js';
 import * as rolemanager from './rolemanager.js';
 import * as setup from './setup.js';
 import * as system from './system.js';
+import * as temprole from './temprole.js';
 
 const MODULES = [
   access,
@@ -38,6 +39,7 @@ const MODULES = [
   roster,
   setup,
   system,
+  temprole,
 ];
 
 /** @type {Map<string, {data: object, execute: Function}>} */

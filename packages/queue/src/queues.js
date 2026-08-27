@@ -29,6 +29,7 @@ export const JobName = Object.freeze({
   SCHEDULED_RECONCILIATION: 'scheduled-reconciliation',
   MAPPING_VALIDATION: 'mapping-validation',
   EXPIRE_TIMED_BANS: 'expire-timed-bans',
+  EXPIRE_TEMP_ROLES: 'expire-temp-roles',
   ROSTER_MEMBER_SYNC: 'roster-member-sync',
   ROSTER_SYNC: 'roster-sync',
   TRANSFER_EXECUTE: 'transfer-execute',
@@ -45,6 +46,7 @@ const QUEUE_FOR_JOB = Object.freeze({
   [JobName.SCHEDULED_RECONCILIATION]: QUEUE_NAMES.MAINTENANCE,
   [JobName.MAPPING_VALIDATION]: QUEUE_NAMES.MAINTENANCE,
   [JobName.EXPIRE_TIMED_BANS]: QUEUE_NAMES.MAINTENANCE,
+  [JobName.EXPIRE_TEMP_ROLES]: QUEUE_NAMES.MAINTENANCE,
   // Roster work gets its own queue rather than sharing the sync queue: a roster bug
   // then cannot starve or stall role synchronization, and vice versa.
   [JobName.ROSTER_MEMBER_SYNC]: QUEUE_NAMES.ROSTER,
@@ -152,6 +154,13 @@ export async function scheduleMaintenanceJobs() {
     'expire-timed-bans',
     { every: 60_000 },
     { name: JobName.EXPIRE_TIMED_BANS, data: { scheduled: true } },
+  );
+
+  // Take back expired temp roles on the same cheap one-minute cadence as timed bans.
+  await queue.upsertJobScheduler(
+    'expire-temp-roles',
+    { every: 60_000 },
+    { name: JobName.EXPIRE_TEMP_ROLES, data: { scheduled: true } },
   );
 
   log.info(

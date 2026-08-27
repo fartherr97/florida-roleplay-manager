@@ -909,3 +909,35 @@ model TimedBan {
   @@index([discordUserId])
   @@map("timed_bans")
 }
+
+/// A Discord role added to a member for a set duration by /temprole.
+///
+/// The role is added immediately in the guild where the command was run and lives in
+/// Discord like any other; this row is the timer and the record. A maintenance sweep
+/// removes the role once `expiresAt` passes and flips `active` off; running /temprole
+/// again for the same member+role supersedes the earlier timer. This is a direct,
+/// standalone role assignment — it is not a managed role and reconciliation ignores it.
+model TempRole {
+  id            String    @id @default(uuid()) @db.Uuid
+  discordGuildId String
+  guildName     String?
+  discordUserId String
+  discordRoleId String
+  roleName      String?
+  reason        String?
+  /// A readable label for who set it (the operator), for the log and the record.
+  addedByLabel  String?
+  addedById     String?   @db.Uuid
+  expiresAt     DateTime
+  active        Boolean   @default(true)
+  removedAt     DateTime?
+  /// 'expired' when the sweep removed it, 'manual' when /temprole removed it early,
+  /// 'superseded' when a newer timer replaced it.
+  removedReason String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([active, expiresAt])
+  @@index([discordUserId])
+  @@map("temp_roles")
+}

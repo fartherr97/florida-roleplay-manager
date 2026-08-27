@@ -12,6 +12,7 @@ import {
   runScheduledReconciliation,
   runScheduledRosterSweep,
   runSyncJob,
+  runTempRoleExpiry,
   runTimedBanExpiry,
   runTransferJob,
   validateManagedRoles,
@@ -103,6 +104,11 @@ export function createMaintenanceProcessor({ gateway }) {
       case JobName.EXPIRE_TIMED_BANS: {
         // Lift any temp ban whose time has passed. Cheap when nothing is due.
         return runTimedBanExpiry({ gateway, prisma });
+      }
+
+      case JobName.EXPIRE_TEMP_ROLES: {
+        // Take back any temp role whose time has passed. Cheap when nothing is due.
+        return runTempRoleExpiry({ gateway, prisma });
       }
 
       default:

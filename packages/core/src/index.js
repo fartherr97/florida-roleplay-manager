@@ -26,6 +26,7 @@ export * from './discord-role-service.js';
 export * from './roster-nickname.js';
 export * from './nickname-service.js';
 export * from './moderation-service.js';
+export * from './temp-role-service.js';
 export * from './roster-resolve.js';
 export * from './roster-service.js';
 export * from './roster-runner.js';
