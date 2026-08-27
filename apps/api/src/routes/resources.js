@@ -117,9 +117,9 @@ export default async function resourceRoutes(fastify) {
   // --- guilds --------------------------------------------------------------
 
   route(fastify, 'get', '/guilds', (request) => listGuilds(request.ctx, request.query));
-  route(fastify, 'post', '/guilds', (request) => registerGuild(request.ctx, request.body));
+  route(fastify, 'post', '/guilds', (request) => registerGuild(request.ctx, request.body, { gateway }));
   route(fastify, 'get', '/guilds/:guildId/status', (request) =>
-    getGuildStatus(request.ctx, { guildId: request.params.guildId }),
+    getGuildStatus(request.ctx, { guildId: request.params.guildId }, { gateway }),
   );
   route(fastify, 'patch', '/guilds/:guildId', (request) =>
     updateGuildSettings(request.ctx, { ...request.body, guildId: request.params.guildId }),
