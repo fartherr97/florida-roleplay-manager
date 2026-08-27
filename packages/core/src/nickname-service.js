@@ -57,9 +57,21 @@ export async function setGlobalNickname(ctx, { discordUserId, nickname, gateway,
     } catch (error) {
       // A member the bot cannot reach in one guild must not stop the others.
       let status = 'failed';
-      if (error?.issueType === SyncIssueType.MEMBER_NOT_IN_GUILD) status = 'absent';
-      else if (error?.issueType === SyncIssueType.GUILD_UNAVAILABLE) status = 'absent';
-      results.push({ guild: guild.name, status, message: error?.userMessage ?? error?.message ?? 'failed' });
+      let message = error?.userMessage ?? error?.message ?? 'failed';
+      if (error?.issueType === SyncIssueType.MEMBER_NOT_IN_GUILD) {
+        status = 'absent';
+      } else if (error?.issueType === SyncIssueType.GUILD_UNAVAILABLE) {
+        status = 'absent';
+      } else if (error?.issueType === SyncIssueType.BOT_MISSING_PERMISSION) {
+        // The generic mapping talks about "roles"; for a nickname the real cause is
+        // almost always the two Discord blocks that hold even with Administrator: the
+        // server owner's nickname cannot be changed by anyone, and a member whose top
+        // role sits above the bot's is out of reach.
+        message =
+          "Can't set this member's nickname — they're the server owner, or their highest " +
+          "role is above the bot's. Discord blocks changing the owner's nickname even with Admin.";
+      }
+      results.push({ guild: guild.name, status, message });
       if (status === 'failed') {
         log.warn(
           { discordGuildId: guild.discordGuildId, discordUserId, err: serializeError(error) },
