@@ -28,6 +28,8 @@ export class RestRoleGateway {
   #ttlMs;
   /** @type {Map<string, {expiresAt: number, promise: Promise<object>}>} */
   #cache = new Map();
+  /** @type {Promise<string|null>|null} the bot's own user id, resolved once from the token */
+  #selfIdPromise = null;
 
   /**
    * @param {object} params
@@ -41,6 +43,27 @@ export class RestRoleGateway {
     this.#applicationId = applicationId;
     this.#ttlMs = ttlMs;
     this.name = 'discord.rest';
+  }
+
+  /**
+   * The bot's own user id, which is what `/guilds/:id/members/:userId` needs to read the
+   * bot member. Prefer the configured application id (a bot's application id is its user
+   * id); otherwise ask Discord for it with `/users/@me`, so a missing DISCORD_CLIENT_ID
+   * never silently disables mapping validation. Resolved once and reused.
+   */
+  async #selfId() {
+    if (this.#applicationId) return this.#applicationId;
+    if (!this.#selfIdPromise) {
+      this.#selfIdPromise = this.#rest
+        .get(Routes.user('@me'))
+        .then((me) => me?.id ?? null)
+        .catch((error) => {
+          this.#selfIdPromise = null; // let a later call retry
+          log.warn({ err: serializeError(error) }, 'could not resolve the bot user id');
+          return null;
+        });
+    }
+    return this.#selfIdPromise;
   }
 
   /** Fetches (and briefly caches) the raw roles, bot member and guild for one guild. */
@@ -70,9 +93,10 @@ export class RestRoleGateway {
     // manage" rather than throwing — the mapping simply will not enable, which is correct.
     let member = null;
     let guild = null;
-    if (this.#applicationId) {
+    const selfId = await this.#selfId();
+    if (selfId) {
       [member, guild] = await Promise.all([
-        this.#rest.get(Routes.guildMember(discordGuildId, this.#applicationId)).catch((error) => {
+        this.#rest.get(Routes.guildMember(discordGuildId, selfId)).catch((error) => {
           log.warn({ err: serializeError(error), discordGuildId }, 'could not read the bot member');
           return null;
         }),
@@ -80,12 +104,12 @@ export class RestRoleGateway {
       ]);
     }
 
-    return { roles, member, guild };
+    return { roles, member, guild, selfId };
   }
 
   /** @param {string} discordGuildId */
   async getGuild(discordGuildId) {
-    const { roles, member, guild } = await this.#snapshot(discordGuildId);
+    const { roles, member, guild, selfId } = await this.#snapshot(discordGuildId);
     if (!member) {
       return {
         id: discordGuildId,
@@ -107,7 +131,7 @@ export class RestRoleGateway {
     // Manage Roles: the guild owner always can; otherwise OR the permission bits of
     // @everyone (the role whose id is the guild id) and every role the bot holds, and look
     // for Administrator or Manage Roles.
-    const isOwner = guild?.owner_id && guild.owner_id === this.#applicationId;
+    const isOwner = Boolean(selfId) && guild?.owner_id === selfId;
     let permissions = BigInt(byId.get(discordGuildId)?.permissions ?? '0');
     for (const roleId of memberRoleIds) {
       permissions |= BigInt(byId.get(roleId)?.permissions ?? '0');
