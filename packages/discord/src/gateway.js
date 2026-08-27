@@ -92,7 +92,15 @@ export class DiscordJsRoleGateway {
     const guild = await this.#fetchGuild(discordGuildId);
     if (!guild) return null;
 
-    const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+    let me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+    // The cached bot member can hold roles/permissions from before an admin change: after
+    // the bot is granted Manage Roles or moved up the role list, `guild.members.me` keeps
+    // returning the stale copy until the process restarts, which reads as a permanent
+    // "bot cannot manage roles". If the cached copy says it cannot, confirm against Discord
+    // with a forced refetch before believing it, so a just-granted permission is seen now.
+    if (me && !me.permissions.has(PermissionFlagsBits.ManageRoles)) {
+      me = (await guild.members.fetchMe({ force: true }).catch(() => null)) ?? me;
+    }
     return {
       id: guild.id,
       name: guild.name,
