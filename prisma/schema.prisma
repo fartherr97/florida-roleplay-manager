@@ -941,3 +941,19 @@ model TempRole {
   @@index([discordUserId])
   @@map("temp_roles")
 }
+
+/// A Discord webhook to post one category of log embeds to, set from the dashboard.
+///
+/// `key` is a stable log category (e.g. "moderation", "temp_role"). When a category has a
+/// row here its URL is used; otherwise logging falls back to the MOD_LOG_WEBHOOK_URL env
+/// var, so nothing breaks before any webhook is configured. The URL is a Discord webhook
+/// secret and is never returned to the browser in full — only a masked preview.
+model LogWebhook {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  url       String
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("log_webhooks")
+}

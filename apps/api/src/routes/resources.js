@@ -35,6 +35,9 @@ import {
   listTiers,
   updateTier,
   listGrants,
+  listLogWebhooks,
+  setLogWebhook,
+  testLogWebhook,
   listGuildDiscordRoles,
   listGuilds,
   listManagedRoles,
@@ -242,6 +245,16 @@ export default async function resourceRoutes(fastify) {
   );
   route(fastify, 'get', '/mappings/:mappingId/audit', (request) =>
     auditForMapping(request.ctx, { mappingId: request.params.mappingId, ...request.query }),
+  );
+
+  // --- log webhooks --------------------------------------------------------
+
+  route(fastify, 'get', '/log-webhooks', (request) => listLogWebhooks(request.ctx));
+  route(fastify, 'put', '/log-webhooks/:key', (request) =>
+    setLogWebhook(request.ctx, { key: request.params.key, url: request.body?.url ?? null }),
+  );
+  route(fastify, 'post', '/log-webhooks/:key/test', (request) =>
+    testLogWebhook(request.ctx, { key: request.params.key }),
   );
 
   // --- synchronization -----------------------------------------------------

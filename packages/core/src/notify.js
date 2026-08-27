@@ -10,6 +10,7 @@
  */
 import { createLogger, serializeError } from '@frm/logging';
 import { getEnv } from '@frm/shared';
+import { resolveLogWebhookUrl } from './log-webhook-service.js';
 
 const log = createLogger('core.notify');
 
@@ -77,15 +78,18 @@ export async function notifyGlobalAdmins(alert) {
  * @param {string} entry.description
  * @param {Array<{name: string, value: string, inline?: boolean}>} [entry.fields]
  * @param {number} [entry.color] embed colour
+ * @param {string} [entry.category] log category ('moderation', 'temp_role'); picks the
+ *   webhook configured for that category, else the MOD_LOG_WEBHOOK_URL env fallback
  */
 export async function notifyModLog(entry) {
   const env = getEnv();
-  const { title, description, fields = [], color = 0x2b2d31 } = entry;
+  const { title, description, fields = [], color = 0x2b2d31, category } = entry;
 
-  if (!env.MOD_LOG_WEBHOOK_URL) return { delivered: false, reason: 'no webhook configured' };
+  const webhookUrl = await resolveLogWebhookUrl(category, { env });
+  if (!webhookUrl) return { delivered: false, reason: 'no webhook configured' };
 
   try {
-    const response = await fetch(env.MOD_LOG_WEBHOOK_URL, {
+    const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

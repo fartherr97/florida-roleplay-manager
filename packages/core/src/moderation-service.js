@@ -156,6 +156,7 @@ export async function banGlobally(ctx, { discordUserId, reason, deleteMessageDay
   }).catch(() => {});
 
   await notifyModLog({
+    category: 'moderation',
     title: expiresAt ? 'Global temp ban' : 'Global ban',
     description: `<@${id}> (\`${id}\`) was banned in **${applied} of ${guilds.length}** registered servers.`,
     color: BAN_COLOR,
@@ -209,6 +210,7 @@ export async function unbanGlobally(ctx, { discordUserId, reason, gateway }) {
   }).catch(() => {});
 
   await notifyModLog({
+    category: 'moderation',
     title: 'Global unban',
     description: `<@${id}> (\`${id}\`) was unbanned in **${applied} of ${guilds.length}** registered servers.`,
     color: UNBAN_COLOR,
@@ -260,6 +262,7 @@ export async function runTimedBanExpiry({ gateway, prisma }) {
     }).catch(() => {});
 
     await notifyModLog({
+      category: 'moderation',
       title: 'Timed ban expired',
       description: `<@${ban.discordUserId}> (\`${ban.discordUserId}\`)'s timed ban expired and was lifted in **${applied} of ${guilds.length}** registered servers.`,
       color: UNBAN_COLOR,

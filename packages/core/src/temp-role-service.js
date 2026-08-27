@@ -119,6 +119,7 @@ export async function addTempRole(
   }).catch(() => {});
 
   await notifyModLog({
+    category: 'temp_role',
     title: 'Temporary role added',
     description: `<@&${roleId}> was given to <@${userId}> (\`${userId}\`) in **${guildName ?? guildId}**.`,
     color: ADD_COLOR,
@@ -193,6 +194,7 @@ export async function removeTempRole(
   }).catch(() => {});
 
   await notifyModLog({
+    category: 'temp_role',
     title: 'Temporary role removed',
     description: `<@&${roleId}> was taken from <@${userId}> (\`${userId}\`) in **${guildName ?? guildId}**.`,
     color: REMOVE_COLOR,
@@ -257,6 +259,7 @@ export async function runTempRoleExpiry({ gateway, prisma }) {
     }).catch(() => {});
 
     await notifyModLog({
+      category: 'temp_role',
       title: 'Temporary role expired',
       description: `<@&${temp.discordRoleId}>'s time on <@${temp.discordUserId}> (\`${temp.discordUserId}\`) expired in **${temp.guildName ?? temp.discordGuildId}** and was taken back off.`,
       color: REMOVE_COLOR,

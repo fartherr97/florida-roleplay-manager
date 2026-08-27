@@ -287,4 +287,6 @@ export const AuditAction = Object.freeze({
   WHITELIST_DENIED: 'whitelist.denied',
 
   SYSTEM_SETTING_UPDATED: 'system.setting_updated',
+  LOG_WEBHOOK_SET: 'system.log_webhook_set',
+  LOG_WEBHOOK_CLEARED: 'system.log_webhook_cleared',
 });
