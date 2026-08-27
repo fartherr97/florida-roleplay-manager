@@ -250,7 +250,7 @@ export default async function resourceRoutes(fastify) {
   // --- log webhooks --------------------------------------------------------
 
   route(fastify, 'get', '/log-webhooks', (request) => listLogWebhooks(request.ctx));
-  route(fastify, 'put', '/log-webhooks/:key', (request) =>
+  route(fastify, 'post', '/log-webhooks/:key', (request) =>
     setLogWebhook(request.ctx, { key: request.params.key, url: request.body?.url ?? null }),
   );
   route(fastify, 'post', '/log-webhooks/:key/test', (request) =>
