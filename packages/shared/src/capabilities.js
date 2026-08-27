@@ -402,6 +402,7 @@ const COMMANDS_BY_CAPABILITY = {
     { name: '/audit member', description: "Show a member's audit history." },
     { name: '/audit mapping', description: "Show a mapping's audit history." },
   ],
+  'audit.export': [{ name: 'Audit log (website)', description: 'Export the audit log.' }],
   'roster.view': [
     { name: '/roster view', description: 'Show a roster.' },
     { name: '/roster list', description: 'List every roster.' },
