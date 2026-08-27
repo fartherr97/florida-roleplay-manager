@@ -377,6 +377,11 @@ const COMMANDS_BY_CAPABILITY = {
   'grant.issue': [
     { name: '/role grant', description: 'Give a member a time-bounded manual role grant.' },
     { name: '/role grants', description: 'List active manual grants.' },
+    {
+      name: '/temprole add',
+      description: 'Add a Discord role to a member for a set duration, then remove it automatically.',
+    },
+    { name: '/temprole remove', description: 'Take a temporary role back off a member early.' },
   ],
   'grant.revoke': [{ name: '/role revoke', description: 'Revoke a manual role grant.' }],
   'rolegrant.manage': [
