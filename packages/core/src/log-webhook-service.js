@@ -57,7 +57,15 @@ export async function listLogWebhooks(ctx) {
   authorize(ctx.actor, { capability: 'system.manage', scope: {} });
   const prisma = ctx.prisma ?? getPrisma();
 
-  const rows = await prisma.logWebhook.findMany({ where: { key: { in: [...CATEGORY_KEYS] } } });
+  // A missing table (the migration has not been applied yet) degrades to "nothing
+  // configured" rather than failing the whole page: every category then shows as using
+  // the env fallback, and configuring one still works once the migration lands.
+  const rows = await prisma.logWebhook
+    .findMany({ where: { key: { in: [...CATEGORY_KEYS] } } })
+    .catch((error) => {
+      log.warn({ err: serializeError(error) }, 'could not read log webhooks; showing fallback');
+      return [];
+    });
   const byKey = new Map(rows.map((row) => [row.key, row]));
 
   return {
