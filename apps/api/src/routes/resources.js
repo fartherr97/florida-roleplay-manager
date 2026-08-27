@@ -74,6 +74,8 @@ import {
   updateRoster,
   upsertManagedRole,
 } from '@frm/core';
+import { getRestGateway } from '@frm/discord';
+import { getEnv } from '@frm/shared';
 
 /**
  * Registers a route that requires authentication.
@@ -86,6 +88,11 @@ function route(fastify, method, url, handler) {
 }
 
 export default async function resourceRoutes(fastify) {
+  // A read-only, REST-backed gateway so mapping create/enable/test can run their live
+  // Discord checks from the API — which holds no gateway connection of its own. It only
+  // reads (roles, the bot member, the guild); the worker remains the only writer.
+  const gateway = getRestGateway({ env: getEnv() });
+
   // --- current user --------------------------------------------------------
 
   route(fastify, 'get', '/me', async (request) => {
@@ -218,15 +225,17 @@ export default async function resourceRoutes(fastify) {
   route(fastify, 'get', '/mappings/:mappingId', (request) =>
     getMapping(request.ctx, request.params.mappingId),
   );
-  route(fastify, 'post', '/mappings', (request) => createMapping(request.ctx, request.body));
+  route(fastify, 'post', '/mappings', (request) =>
+    createMapping(request.ctx, request.body, { gateway }),
+  );
   route(fastify, 'patch', '/mappings/:mappingId', (request) =>
-    updateMapping(request.ctx, { ...request.body, mappingId: request.params.mappingId }),
+    updateMapping(request.ctx, { ...request.body, mappingId: request.params.mappingId }, { gateway }),
   );
   route(fastify, 'post', '/mappings/:mappingId/enabled', (request) =>
-    setMappingEnabled(request.ctx, { ...request.body, mappingId: request.params.mappingId }),
+    setMappingEnabled(request.ctx, { ...request.body, mappingId: request.params.mappingId }, { gateway }),
   );
   route(fastify, 'post', '/mappings/:mappingId/test', (request) =>
-    testMapping(request.ctx, { mappingId: request.params.mappingId }),
+    testMapping(request.ctx, { mappingId: request.params.mappingId }, { gateway }),
   );
   route(fastify, 'delete', '/mappings/:mappingId', (request) =>
     deleteMapping(request.ctx, { ...request.body, mappingId: request.params.mappingId }),
