@@ -64,3 +64,55 @@ export async function notifyGlobalAdmins(alert) {
     return { delivered: false, reason: 'request failed' };
   }
 }
+
+/**
+ * Posts a moderation-log embed to the configured mod-log webhook (MOD_LOG_WEBHOOK_URL).
+ *
+ * Used by the global ban/unban commands so every mass action lands in one channel. Best
+ * effort like the admin alert: a webhook failure never aborts the moderation action it
+ * reports, and the audit record is the durable trail.
+ *
+ * @param {object} entry
+ * @param {string} entry.title
+ * @param {string} entry.description
+ * @param {Array<{name: string, value: string, inline?: boolean}>} [entry.fields]
+ * @param {number} [entry.color] embed colour
+ */
+export async function notifyModLog(entry) {
+  const env = getEnv();
+  const { title, description, fields = [], color = 0x2b2d31 } = entry;
+
+  if (!env.MOD_LOG_WEBHOOK_URL) return { delivered: false, reason: 'no webhook configured' };
+
+  try {
+    const response = await fetch(env.MOD_LOG_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'Florida Roleplay Manager',
+        embeds: [
+          {
+            title: title.slice(0, 256),
+            description: description.slice(0, 4000),
+            color,
+            fields: fields.slice(0, 25).map((field) => ({
+              name: String(field.name).slice(0, 256),
+              value: String(field.value).slice(0, 1024),
+              inline: field.inline ?? false,
+            })),
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      log.warn({ status: response.status }, 'mod-log webhook rejected the message');
+      return { delivered: false, reason: `status ${response.status}` };
+    }
+    return { delivered: true };
+  } catch (error) {
+    log.error({ err: serializeError(error) }, 'mod-log webhook failed');
+    return { delivered: false, reason: 'request failed' };
+  }
+}

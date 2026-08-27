@@ -105,6 +105,8 @@ const envSchema = z
     DISCORD_OAUTH_REDIRECT_URI: z.string().min(1).optional(),
     GLOBAL_ADMIN_DISCORD_IDS: snowflakeList(),
     ADMIN_ALERT_WEBHOOK_URL: z.string().min(1).optional(),
+    // Discord webhook the global ban/unban commands post their embedded log to.
+    MOD_LOG_WEBHOOK_URL: z.string().min(1).optional(),
 
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: integerish(4000, { min: 1, max: 65535 }),

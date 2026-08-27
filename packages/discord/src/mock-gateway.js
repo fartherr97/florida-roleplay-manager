@@ -262,6 +262,22 @@ export class MockRoleGateway {
     return { applied: true, nickname: member.nickname };
   }
 
+  async banMember(discordGuildId, discordUserId, options = {}) {
+    this.calls.push({ action: 'BAN', discordGuildId, discordUserId, ...options });
+    this.#maybeFail(discordGuildId, discordUserId, null);
+    (this.bans ??= new Set()).add(`${discordGuildId}:${discordUserId}`);
+    return { applied: true };
+  }
+
+  async unbanMember(discordGuildId, discordUserId, reason) {
+    this.calls.push({ action: 'UNBAN', discordGuildId, discordUserId, reason });
+    this.#maybeFail(discordGuildId, discordUserId, null);
+    const key = `${discordGuildId}:${discordUserId}`;
+    if (!this.bans?.has(key)) return { applied: false, reason: 'not_banned' };
+    this.bans.delete(key);
+    return { applied: true };
+  }
+
   async leaveGuild(discordGuildId) {
     this.leftGuilds.push(discordGuildId);
     this.guilds.delete(discordGuildId);

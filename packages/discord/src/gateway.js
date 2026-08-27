@@ -38,7 +38,7 @@
  */
 import { createLogger, serializeError } from '@frm/logging';
 import { ChannelType, PermissionFlagsBits } from 'discord.js';
-import { mapDiscordError } from './errors.js';
+import { DiscordErrorCode, mapDiscordError } from './errors.js';
 
 const log = createLogger('discord.gateway');
 
@@ -252,6 +252,51 @@ export class DiscordJsRoleGateway {
         { discordGuildId, discordUserId, err: serializeError(error) },
         'set nickname failed',
       );
+      throw mapDiscordError(error, { discordGuildId, discordUserId });
+    }
+  }
+
+  /**
+   * Bans a user from a guild. Works by user id, so it applies whether or not the user
+   * is currently a member (a ban on someone who already left still takes).
+   *
+   * @param {string} discordGuildId
+   * @param {string} discordUserId
+   * @param {{reason?: string, deleteMessageSeconds?: number}} [options]
+   * @returns {Promise<{applied: true}>}
+   */
+  async banMember(discordGuildId, discordUserId, { reason, deleteMessageSeconds } = {}) {
+    try {
+      const guild = await this.#requireGuild(discordGuildId);
+      await guild.bans.create(discordUserId, {
+        reason: truncateReason(reason),
+        deleteMessageSeconds: deleteMessageSeconds ?? 0,
+      });
+      return { applied: true };
+    } catch (error) {
+      log.warn({ discordGuildId, discordUserId, err: serializeError(error) }, 'ban failed');
+      throw mapDiscordError(error, { discordGuildId, discordUserId });
+    }
+  }
+
+  /**
+   * Lifts a ban. Unbanning someone who is not banned is reported as a no-op rather than
+   * an error, so a global unban does not fail on the guilds where the user was never
+   * banned.
+   *
+   * @param {string} discordGuildId
+   * @param {string} discordUserId
+   * @param {string} [reason]
+   * @returns {Promise<{applied: boolean, reason?: string}>}
+   */
+  async unbanMember(discordGuildId, discordUserId, reason) {
+    try {
+      const guild = await this.#requireGuild(discordGuildId);
+      await guild.bans.remove(discordUserId, truncateReason(reason));
+      return { applied: true };
+    } catch (error) {
+      if (error?.code === DiscordErrorCode.UNKNOWN_BAN) return { applied: false, reason: 'not_banned' };
+      log.warn({ discordGuildId, discordUserId, err: serializeError(error) }, 'unban failed');
       throw mapDiscordError(error, { discordGuildId, discordUserId });
     }
   }

@@ -7,7 +7,9 @@
 import * as access from './access.js';
 import * as audit from './audit.js';
 import * as bgcheck from './bgcheck.js';
+import * as globalban from './globalban.js';
 import * as globalnickname from './globalnickname.js';
+import * as globalunban from './globalunban.js';
 import * as guild from './guild.js';
 import * as mapping from './mapping.js';
 import * as member from './member.js';
@@ -23,7 +25,9 @@ const MODULES = [
   access,
   audit,
   bgcheck,
+  globalban,
   globalnickname,
+  globalunban,
   guild,
   mapping,
   member,
