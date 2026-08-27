@@ -29,7 +29,7 @@ vi.mock('../../apps/bot/src/commands/index.js', () => ({
   commandPayload: () => [{ name: 'role' }, { name: 'guild' }],
 }));
 
-const { registerCommands, registerGuildCommands } =
+const { registerCommands, registerGuildCommands, clearGlobalCommands } =
   await import('../../apps/bot/src/lib/register.js');
 
 const baseEnv = { DISCORD_BOT_TOKEN: 'token', DISCORD_CLIENT_ID: '111111111111111111' };
@@ -113,5 +113,16 @@ describe('registerGuildCommands', () => {
 
     expect(result.guildIds).toEqual(['555555555555555555']);
     expect(put).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('clearGlobalCommands', () => {
+  beforeEach(() => put.mockClear());
+
+  it('empties the global command set so guild-scoped commands do not double up', async () => {
+    const result = await clearGlobalCommands({ env: baseEnv });
+
+    expect(result).toEqual({ scope: 'global', cleared: true });
+    expect(put).toHaveBeenCalledExactlyOnceWith('global:111111111111111111', { body: [] });
   });
 });

@@ -60,3 +60,22 @@ export async function registerCommands({
   await rest.put(Routes.applicationCommands(env.DISCORD_CLIENT_ID), { body });
   return { scope: 'global', count: body.length, guildIds: [] };
 }
+
+/**
+ * Empties the global command set.
+ *
+ * When the bot registers guild-scoped commands (the single-community setup), Discord still
+ * shows any commands left in the *global* scope from an earlier global registration — so
+ * every command appears twice, once per scope. Clearing global whenever we go guild-scoped
+ * keeps exactly one copy. It is idempotent: clearing an already-empty global set is a
+ * no-op, so it is safe to run on every boot.
+ *
+ * @param {object} params
+ * @param {object} params.env parsed environment: DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID
+ * @returns {Promise<{scope: 'global', cleared: true}>}
+ */
+export async function clearGlobalCommands({ env }) {
+  const rest = new REST({ version: '10' }).setToken(env.DISCORD_BOT_TOKEN);
+  await rest.put(Routes.applicationCommands(env.DISCORD_CLIENT_ID), { body: [] });
+  return { scope: 'global', cleared: true };
+}

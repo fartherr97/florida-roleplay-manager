@@ -15,7 +15,7 @@ import { closeQueues, closeRedis } from '@frm/queue';
 import { getEnv } from '@frm/shared';
 import { isGuildApproved, reconcileGlobalAdminsSafely } from '@frm/core';
 import { registerEventHandlers } from './events.js';
-import { registerCommands, registerGuildCommands } from './lib/register.js';
+import { clearGlobalCommands, registerCommands, registerGuildCommands } from './lib/register.js';
 
 const log = createLogger('bot');
 
@@ -60,6 +60,18 @@ async function main() {
       { scope: registered.scope, count: registered.count, guilds: registered.guildIds.length },
       'slash commands registered',
     );
+
+    // Guild scope owns the commands here, so wipe any commands left in the global scope by
+    // an earlier global registration — otherwise Discord shows every command twice (once
+    // global, once per guild). Idempotent, so it runs safely on every boot and keeps the
+    // fix persistent across deploys without a manual clear.
+    if (perGuild) {
+      await clearGlobalCommands({ env })
+        .then(() => log.info('cleared global commands to avoid duplicates in guild scope'))
+        .catch((error) =>
+          log.warn({ err: serializeError(error) }, 'could not clear global commands; continuing'),
+        );
+    }
   } catch (error) {
     log.error({ err: serializeError(error) }, 'slash command registration failed; continuing');
   }
