@@ -373,6 +373,9 @@ export function presentRoster(roster) {
       callsignRangeEnd: rank.callsignRangeEnd ?? null,
       // The bound Discord role's colour, so the website can band the roster to match.
       color: rank.color ?? null,
+      // Whose name wins across guilds for this rank's holders (see NicknamePriority),
+      // so the dashboard can show and edit it.
+      nicknamePriority: rank.nicknamePriority ?? 'NONE',
       members: active
         .filter((membership) => membership.rankId === rank.id)
         .map((membership) => ({
