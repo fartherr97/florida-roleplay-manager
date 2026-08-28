@@ -26,6 +26,7 @@ import {
   AuditAction,
   GuildType,
   IssueSeverity,
+  NicknamePriority,
   RosterMembershipStatus,
   SyncActionType,
   SyncIssueType,
@@ -37,6 +38,7 @@ import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
 import { createSyncJob, enqueueSyncJob } from './sync-service.js';
 import { findApprovedGuildBySnowflake } from './resolve.js';
+import { parseNickname } from './roster-nickname.js';
 import { queueRosterSync } from './roster-service.js';
 import { resolveTierAccessForMember, syncWebsiteAccess } from './access-service.js';
 import { notifyGlobalAdmins } from './notify.js';
@@ -362,8 +364,139 @@ export async function handleMemberNicknameChange({
     if (job) jobIds.push(job.id);
   }
 
+  // Cross-guild propagation: if this edit is in the member's authoritative guild
+  // (see NicknamePriority), push the new name to their rosters in every other guild
+  // so all their guilds show the same name. An edit in a non-authoritative guild is
+  // left to the reconcile above, which reverts it to the synced name.
+  try {
+    const authority = await resolveNicknameAuthority({ prisma, discordUserId });
+    if (authority && authority.guildId === guild.id) {
+      const propagated = await propagateSyncedName({
+        prisma,
+        ctx,
+        discordUserId,
+        authorityGuildId: guild.id,
+        nickname,
+      });
+      jobIds.push(...propagated);
+    }
+  } catch (error) {
+    log.error({ err: serializeError(error), discordUserId }, 'nickname propagation failed');
+  }
+
   log.debug({ discordUserId, nickname, jobs: jobIds.length }, 'nickname drift queued');
   return { queued: jobIds.length > 0, reason: 'nickname reconciliation queued', jobIds };
+}
+
+/**
+ * Which guild is the source of a member's name, and at what priority.
+ *
+ * MAIN (staff/dev/director/owner ranks) wins outright — the main community's name
+ * everywhere. Otherwise the highest DEPARTMENT rank makes its own guild the source,
+ * for a full-time member whose department name is the one that should show. With
+ * neither, the main community is the default source. Returns null when there is
+ * nothing to sync across (the member is on nickname rosters in at most one guild).
+ *
+ * @returns {Promise<{guildId: string, priority: string}|null>}
+ */
+async function resolveNicknameAuthority({ prisma, discordUserId }) {
+  const memberships = await prisma.rosterMembership.findMany({
+    where: {
+      discordUserId,
+      status: RosterMembershipStatus.ACTIVE,
+      roster: { ...notDeleted, nicknameSyncEnabled: true },
+    },
+    select: {
+      rank: { select: { nicknamePriority: true, position: true } },
+      roster: { select: { approvedGuildId: true, guild: { select: { type: true } } } },
+    },
+  });
+
+  const guildIds = new Set(memberships.map((m) => m.roster.approvedGuildId));
+  if (guildIds.size < 2) return null; // one guild (or none): nothing to propagate across
+
+  let mainCommunityGuildId = null;
+  let hasMainRank = false;
+  let bestDept = null; // { guildId, position }
+  for (const m of memberships) {
+    const priority = m.rank?.nicknamePriority ?? NicknamePriority.NONE;
+    const guildId = m.roster.approvedGuildId;
+    if (m.roster.guild?.type === GuildType.MAIN_COMMUNITY) mainCommunityGuildId = guildId;
+    if (priority === NicknamePriority.MAIN) hasMainRank = true;
+    else if (priority === NicknamePriority.DEPARTMENT) {
+      const position = m.rank?.position ?? 0;
+      if (!bestDept || position > bestDept.position) bestDept = { guildId, position };
+    }
+  }
+
+  if (hasMainRank && mainCommunityGuildId) {
+    return { guildId: mainCommunityGuildId, priority: NicknamePriority.MAIN };
+  }
+  if (bestDept) return { guildId: bestDept.guildId, priority: NicknamePriority.DEPARTMENT };
+  if (mainCommunityGuildId) {
+    return { guildId: mainCommunityGuildId, priority: NicknamePriority.NONE };
+  }
+  return null;
+}
+
+/**
+ * Locks the member's name in every guild other than the authoritative one to the name
+ * they now carry there, and queues those rosters so it applies immediately. Clears the
+ * synced name on the authoritative guild's own rows, where the local nickname rules.
+ *
+ * @returns {Promise<string[]>} the ids of the roster-sync jobs queued
+ */
+async function propagateSyncedName({ prisma, ctx, discordUserId, authorityGuildId, nickname }) {
+  const name = parseNickname(nickname).name;
+  if (!name) return []; // an empty name is nothing to propagate
+
+  const memberships = await prisma.rosterMembership.findMany({
+    where: {
+      discordUserId,
+      status: RosterMembershipStatus.ACTIVE,
+      roster: { ...notDeleted, nicknameSyncEnabled: true },
+    },
+    select: { id: true, syncedName: true, roster: { select: { id: true, slug: true, approvedGuildId: true } } },
+  });
+
+  const others = memberships.filter((m) => m.roster.approvedGuildId !== authorityGuildId);
+  if (others.length === 0) return [];
+
+  const staleHere = memberships.filter(
+    (m) => m.roster.approvedGuildId === authorityGuildId && m.syncedName !== null,
+  );
+  const needWrite = others.filter((m) => m.syncedName !== name);
+
+  if (needWrite.length > 0) {
+    await prisma.rosterMembership.updateMany({
+      where: { id: { in: needWrite.map((m) => m.id) } },
+      data: { syncedName: name },
+    });
+  }
+  if (staleHere.length > 0) {
+    await prisma.rosterMembership.updateMany({
+      where: { id: { in: staleHere.map((m) => m.id) } },
+      data: { syncedName: null },
+    });
+  }
+
+  const jobIds = [];
+  const seen = new Set();
+  for (const { roster } of others) {
+    if (seen.has(roster.id)) continue;
+    seen.add(roster.id);
+    const job = await queueRosterSync(ctx, {
+      roster,
+      discordUserId,
+      reason: 'Name synced from authoritative guild',
+      prisma,
+    }).catch((error) => {
+      log.error({ err: serializeError(error), slug: roster.slug }, 'could not queue synced-name sync');
+      return null;
+    });
+    if (job) jobIds.push(job.id);
+  }
+  return jobIds;
 }
 
 /**

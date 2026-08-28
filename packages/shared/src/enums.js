@@ -167,6 +167,19 @@ export const RosterMembershipStatus = Object.freeze({
   DEPARTED: 'DEPARTED',
 });
 
+/**
+ * Whose nickname wins when a member is on rosters in more than one guild. MAIN
+ * forces the main community's name everywhere (staff/dev/director/owner), DEPARTMENT
+ * makes the rank's own guild the source (full-time department members), NONE follows
+ * the default. MAIN outranks DEPARTMENT.
+ * @readonly
+ */
+export const NicknamePriority = Object.freeze({
+  NONE: 'NONE',
+  MAIN: 'MAIN',
+  DEPARTMENT: 'DEPARTMENT',
+});
+
 /** @readonly */
 export const IssueSeverity = Object.freeze({
   INFO: 'INFO',

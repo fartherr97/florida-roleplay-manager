@@ -210,6 +210,11 @@ export async function bindRosterRank(ctx, input) {
           callsignRangeEnd: data.callsignRangeEnd ?? null,
         };
 
+  // Same rule as the callsign block: only touch the nickname priority when the caller
+  // sent it, so re-binding a rank from Discord does not reset one set on the dashboard.
+  const priorityPatch =
+    data.nicknamePriority === undefined ? {} : { nicknamePriority: data.nicknamePriority };
+
   const rank = existing
     ? await prisma.rosterRank.update({
         where: { id: existing.id },
@@ -219,6 +224,7 @@ export async function bindRosterRank(ctx, input) {
           position: data.position,
           deletedAt: null,
           ...rangePatch,
+          ...priorityPatch,
         },
       })
     : await prisma.rosterRank.create({
@@ -229,6 +235,7 @@ export async function bindRosterRank(ctx, input) {
           shortName: data.shortName ?? null,
           position: data.position,
           ...rangePatch,
+          ...priorityPatch,
         },
       });
 

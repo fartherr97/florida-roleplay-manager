@@ -156,6 +156,21 @@ enum RosterMembershipStatus {
   DEPARTED
 }
 
+/// Whose nickname wins when a member is on rosters in more than one guild.
+///
+/// NONE       - no opinion; the member's name follows the default (the main
+///              community's nickname propagates to their other guilds).
+/// MAIN       - this rank forces the main community's nickname everywhere, the
+///              exception for staff, developers, directors and owners.
+/// DEPARTMENT - this rank makes its own guild the source of the member's name,
+///              for a full-time member whose department name is the one that
+///              should show everywhere. MAIN outranks DEPARTMENT.
+enum NicknamePriority {
+  NONE
+  MAIN
+  DEPARTMENT
+}
+
 enum PendingApprovalStatus {
   PENDING
   APPROVED
@@ -535,6 +550,10 @@ model RosterRank {
   /// sync so the website can band the roster in the same colours staff see in Discord.
   /// Null when the role has no colour set.
   color         String?
+  /// Whether holding this rank makes the main community's name (MAIN) or this
+  /// roster's guild name (DEPARTMENT) the one that propagates to the member's
+  /// other guilds. NONE leaves them on the default. MAIN outranks DEPARTMENT.
+  nicknamePriority NicknamePriority @default(NONE)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?
@@ -572,6 +591,11 @@ model RosterMembership {
   /// The last nickname the platform wrote, so an externally changed nickname can be
   /// told apart from one that is simply out of date.
   managedNickname String?
+  /// The name propagated from the member's authoritative guild (see NicknamePriority),
+  /// so every guild they are on shows the same name. Lower precedence than an
+  /// administrator's `preferredName` but higher than the guild's own nickname, and
+  /// null on the authoritative guild's own membership, where the local nickname rules.
+  syncedName      String?
   joinedAt        DateTime               @default(now())
   departedAt      DateTime?
   createdAt       DateTime               @default(now())

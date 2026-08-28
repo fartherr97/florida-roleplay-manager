@@ -447,6 +447,9 @@ export const bindRosterRankSchema = z
     // [start, end]. Explicit null on both clears the block; undefined leaves it alone.
     callsignRangeStart: z.number().int().min(0).max(99999).nullish(),
     callsignRangeEnd: z.number().int().min(0).max(99999).nullish(),
+    // Whose name wins across guilds for someone holding this rank: MAIN forces the
+    // main community's name, DEPARTMENT this guild's, NONE follows the default.
+    nicknamePriority: z.enum(['NONE', 'MAIN', 'DEPARTMENT']).optional(),
     reason: optionalReason,
   })
   .refine((data) => (data.callsignRangeStart == null) === (data.callsignRangeEnd == null), {

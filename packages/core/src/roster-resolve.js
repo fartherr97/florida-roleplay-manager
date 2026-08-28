@@ -187,7 +187,11 @@ export function planMemberChange({
 
   const rank = resolveRank(ranks, member.roleIds ?? []);
   const wasActive = membership?.status === RosterMembershipStatus.ACTIVE;
-  const name = membership?.preferredName || inferPreferredName(member) || membership?.displayName;
+  const name =
+    membership?.preferredName ||
+    membership?.syncedName ||
+    inferPreferredName(member) ||
+    membership?.displayName;
 
   if (!rank) {
     const built = nicknameSync
@@ -195,6 +199,7 @@ export function planMemberChange({
           currentNickname: member.nickname ?? null,
           fallbackName: member.username ?? member.displayName ?? null,
           preferredName: membership?.preferredName ?? null,
+          syncedName: membership?.syncedName ?? null,
           callsign: null,
           rank: null,
         })
@@ -224,6 +229,7 @@ export function planMemberChange({
         currentNickname: member.nickname ?? null,
         fallbackName: member.username ?? member.displayName ?? null,
         preferredName: membership?.preferredName ?? null,
+        syncedName: membership?.syncedName ?? null,
         callsign,
         rank: rankShortName(rank),
       })

@@ -162,6 +162,28 @@ describe('buildManagedNickname', () => {
     expect(built.nickname).toBe('165 | Jr. Admin | Mike');
   });
 
+  it('uses the synced name over the local nickname, but under an admin override', () => {
+    // The name propagated from the member's authoritative guild wins over the name in
+    // this guild's own nickname.
+    const synced = buildManagedNickname({
+      currentNickname: '165 | Jr. Admin | LocalName',
+      syncedName: 'Jamison',
+      callsign: '165',
+      rank: 'Jr. Admin',
+    });
+    expect(synced.nickname).toBe('165 | Jr. Admin | Jamison');
+
+    // An administrator's explicit preferredName still outranks the synced name.
+    const overridden = buildManagedNickname({
+      currentNickname: '165 | Jr. Admin | LocalName',
+      preferredName: 'Carter',
+      syncedName: 'Jamison',
+      callsign: '165',
+      rank: 'Jr. Admin',
+    });
+    expect(overridden.nickname).toBe('165 | Jr. Admin | Carter');
+  });
+
   it('falls back to the username when there is no nickname at all', () => {
     const built = buildManagedNickname({
       currentNickname: null,

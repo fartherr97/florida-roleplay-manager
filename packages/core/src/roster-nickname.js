@@ -159,16 +159,19 @@ export function buildManagedNickname({
   currentNickname,
   fallbackName = null,
   preferredName = null,
+  syncedName = null,
   callsign = null,
   rank = null,
   maxLength = NICKNAME_MAX_LENGTH,
 }) {
   const parsed = parseNickname(currentNickname);
 
-  // Precedence: an explicitly set name wins, then whatever their nickname says their
-  // name is, then their username. The parsed name is preferred over the raw nickname so
-  // an existing managed prefix is stripped instead of being rendered into the new one.
-  const rawName = collapse(preferredName) || parsed.name || collapse(fallbackName) || '';
+  // Precedence: an administrator's explicit name wins, then the name propagated from
+  // the member's authoritative guild, then whatever their nickname here says their name
+  // is, then their username. The parsed name is preferred over the raw nickname so an
+  // existing managed prefix is stripped instead of being rendered into the new one.
+  const rawName =
+    collapse(preferredName) || collapse(syncedName) || parsed.name || collapse(fallbackName) || '';
 
   // Every name source is parsed again before it is trusted. A `preferredName` or a
   // username can itself be in the managed shape — "189 | Trial Mod" left behind by a
