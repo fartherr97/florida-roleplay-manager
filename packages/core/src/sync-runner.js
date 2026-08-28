@@ -33,6 +33,13 @@ import { loadMemberGrants, loadPlatformContext, planForDiscordUser } from '@frm/
 import { recordAudit } from './audit-service.js';
 import { notifyGlobalAdmins } from './notify.js';
 import { systemContext } from './context.js';
+import { createSyncJob, enqueueSyncJob } from './sync-service.js';
+
+/** How many times a member may be re-queued for lock contention before the scheduled
+ * sweep is left to heal it — bounds any requeue storm under sustained spam. */
+const MAX_RELOCK_ATTEMPTS = 5;
+/** Wait before a re-queued reconcile runs, so the job holding the lock finishes first. */
+const RELOCK_DELAY_MS = 3000;
 
 const log = createLogger('core.sync-runner');
 
@@ -331,6 +338,7 @@ async function applyPlans({ job, plans, gateway, prisma }) {
   let applied = 0;
   let failed = 0;
   let skipped = 0;
+  const contended = []; // members we could not lock this pass
 
   for (const entry of plans) {
     if (entry.plan.actions.length === 0) {
@@ -350,10 +358,13 @@ async function applyPlans({ job, plans, gateway, prisma }) {
     });
 
     if (outcome.skipped) {
-      // Somebody else is already synchronizing this member. Because reconciliation is
-      // idempotent, letting their job do the work is correct.
+      // Another job holds this member's lock. That job's plan was built from an earlier
+      // snapshot, so under a burst of role changes it can apply an intermediate state and
+      // miss the final one — the "spammed it and the removal was missed" case. Rather than
+      // trust it, re-reconcile this member from fresh state once the burst settles.
       skipped += entry.plan.actions.length;
-      log.debug({ member: lockKey, jobId: job.id }, 'member locked by another job; skipping');
+      contended.push(entry);
+      log.debug({ member: lockKey, jobId: job.id }, 'member locked by another job; will re-queue');
       continue;
     }
 
@@ -364,7 +375,48 @@ async function applyPlans({ job, plans, gateway, prisma }) {
     await persistPlanMetadata({ job, entry, prisma });
   }
 
+  if (contended.length > 0) {
+    await requeueContendedMembers({ job, entries: contended, prisma }).catch((error) =>
+      log.error({ err: serializeError(error), jobId: job.id }, 'could not re-queue contended members'),
+    );
+  }
+
   return { applied, failed, skipped };
+}
+
+/**
+ * Queues a fresh, delayed reconcile for each member this job could not lock, so a change
+ * lost to a stale-snapshot job is picked up from current live state. Bounded by a per-chain
+ * attempt counter so a sustained storm eventually defers to the scheduled sweep instead of
+ * re-queuing forever.
+ */
+async function requeueContendedMembers({ job, entries, prisma }) {
+  const attempt = Number(job.payload?.relockAttempt ?? 0);
+  if (attempt >= MAX_RELOCK_ATTEMPTS) {
+    log.warn(
+      { jobId: job.id, attempt, members: entries.length },
+      'lock contention persists; leaving it to the scheduled sweep',
+    );
+    return;
+  }
+
+  const ctx = { ...systemContext({ label: 'sync-runner-relock' }), source: job.source ?? ActionSource.SYSTEM };
+  for (const entry of entries) {
+    const linked = Boolean(entry.userId);
+    const created = await createSyncJob(prisma, ctx, {
+      type: linked ? SyncJobType.MEMBER_RESYNC : SyncJobType.MAPPING_PROPAGATION,
+      targetUserId: entry.userId ?? null,
+      parentJobId: job.id,
+      dryRun: false,
+      reason: 'Re-reconcile after lock contention',
+      payload: {
+        userId: entry.userId ?? null,
+        discordUserId: entry.discordUserId,
+        relockAttempt: attempt + 1,
+      },
+    });
+    await enqueueSyncJob(created, { prisma, delayMs: RELOCK_DELAY_MS });
+  }
 }
 
 /**

@@ -80,7 +80,7 @@ export async function createSyncJob(client, ctx, params) {
  * @param {object} job the SyncJob row
  * @param {object} [options]
  */
-export async function enqueueSyncJob(job, { prisma = getPrisma() } = {}) {
+export async function enqueueSyncJob(job, { prisma = getPrisma(), delayMs } = {}) {
   const jobName = JOB_NAME_FOR_TYPE[job.type];
   if (!jobName) {
     log.error({ type: job.type }, 'no queue job registered for sync job type');
@@ -91,7 +91,7 @@ export async function enqueueSyncJob(job, { prisma = getPrisma() } = {}) {
     const queued = await enqueue(
       jobName,
       { syncJobId: job.id, type: job.type, dryRun: job.dryRun, payload: job.payload ?? {} },
-      { jobId: job.id },
+      { jobId: job.id, ...(delayMs > 0 ? { delay: delayMs } : {}) },
     );
     await prisma.syncJob.update({
       where: { id: job.id },
