@@ -15,7 +15,12 @@ import { closeQueues, closeRedis } from '@frm/queue';
 import { getEnv } from '@frm/shared';
 import { isGuildApproved, reconcileGlobalAdminsSafely } from '@frm/core';
 import { registerEventHandlers } from './events.js';
-import { clearGlobalCommands, registerCommands, registerGuildCommands } from './lib/register.js';
+import {
+  clearGlobalCommands,
+  clearGuildCommands,
+  registerCommands,
+  registerGuildCommands,
+} from './lib/register.js';
 
 const log = createLogger('bot');
 
@@ -71,6 +76,20 @@ async function main() {
         .catch((error) =>
           log.warn({ err: serializeError(error) }, 'could not clear global commands; continuing'),
         );
+    } else {
+      // Global scope owns the commands here, so wipe any commands left in a guild
+      // scope by an earlier guild-scoped registration — otherwise those guilds show
+      // every command twice (once global, once per guild). Idempotent per guild.
+      const guildIds = [...client.guilds.cache.keys()];
+      if (guildIds.length > 0) {
+        await clearGuildCommands({ env, guildIds })
+          .then((r) =>
+            log.info({ cleared: r.cleared.length }, 'cleared guild commands to avoid duplicates in global scope'),
+          )
+          .catch((error) =>
+            log.warn({ err: serializeError(error) }, 'could not clear guild commands; continuing'),
+          );
+      }
     }
   } catch (error) {
     log.error({ err: serializeError(error) }, 'slash command registration failed; continuing');

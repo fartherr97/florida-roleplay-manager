@@ -36,7 +36,7 @@ import {
   syncJobListSchema,
 } from '@frm/validation';
 import { recordAudit } from './audit-service.js';
-import { authorizeAnyScope, resolveApprovedGuild, resolveUser } from './resolve.js';
+import { authorizeAnyScope, resolveApprovedGuild, resolveOrCreateUser } from './resolve.js';
 
 const log = createLogger('core.sync');
 
@@ -157,9 +157,15 @@ export async function createAndEnqueue(ctx, params) {
  */
 export async function resyncMember(ctx, input) {
   const data = parseOrThrow(resyncMemberSchema, input);
-  const user = await resolveUser(ctx, data);
 
   authorizeAnyScope(ctx, 'sync.member', { allowSelf: true });
+
+  // Resync's whole job is to make the platform reflect a Discord member, so a
+  // member the platform has never recorded is created on demand rather than
+  // refused — otherwise "resync this member" fails for exactly the people who
+  // most need reconciling: those the platform has not seen yet. The
+  // authorization check above still gates who may trigger it.
+  const user = await resolveOrCreateUser(ctx, data);
 
   return createAndEnqueue(ctx, {
     type: SyncJobType.MEMBER_RESYNC,

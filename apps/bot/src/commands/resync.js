@@ -93,6 +93,7 @@ async function handleMember(interaction, ctx) {
 
   const { job } = await resyncMember(ctx, {
     discordUserId: user.id,
+    displayName: user.globalName ?? user.username ?? undefined,
     ...(dryRun === null ? {} : { dryRun }),
     reason: interaction.options.getString('reason') ?? undefined,
   });

@@ -530,6 +530,9 @@ export const resyncMemberSchema = z
   .object({
     userId: uuid.optional(),
     discordUserId: optionalSnowflake,
+    // Names a member created on first resync, so a never-seen account is not
+    // stored as "Discord 1234".
+    displayName: z.string().trim().max(100).optional(),
     dryRun: booleanFlag.optional(),
     reason: optionalReason,
   })

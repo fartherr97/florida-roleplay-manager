@@ -79,3 +79,32 @@ export async function clearGlobalCommands({ env }) {
   await rest.put(Routes.applicationCommands(env.DISCORD_CLIENT_ID), { body: [] });
   return { scope: 'global', cleared: true };
 }
+
+/**
+ * Empties the guild-scoped command set for the given guilds.
+ *
+ * The mirror of {@link clearGlobalCommands}: when the bot registers *globally*,
+ * any commands left in a *guild* scope from an earlier guild-scoped registration
+ * still show — so every command appears twice in those guilds. Clearing them
+ * whenever we go global keeps exactly one copy. Idempotent and best-effort per
+ * guild, so a single guild that refuses the clear does not stop the rest.
+ *
+ * @param {object} params
+ * @param {object} params.env parsed environment: DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID
+ * @param {string[]} params.guildIds guilds to clear
+ * @returns {Promise<{scope: 'guild', cleared: string[]}>}
+ */
+export async function clearGuildCommands({ env, guildIds }) {
+  const targets = [...new Set(guildIds)].filter(Boolean);
+  const rest = new REST({ version: '10' }).setToken(env.DISCORD_BOT_TOKEN);
+  const cleared = [];
+  for (const guildId of targets) {
+    try {
+      await rest.put(Routes.applicationGuildCommands(env.DISCORD_CLIENT_ID, guildId), { body: [] });
+      cleared.push(guildId);
+    } catch {
+      // Best-effort: a guild the bot can no longer manage just keeps its stale set.
+    }
+  }
+  return { scope: 'guild', cleared };
+}
