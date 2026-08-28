@@ -33,7 +33,12 @@ import {
   SyncJobType,
 } from '@frm/shared';
 import { loadActor } from '@frm/authorization';
-import { claimNicknameMarker, claimSyncMarker } from '@frm/queue';
+import {
+  claimNicknameMarker,
+  claimSyncMarker,
+  discardNicknameMarker,
+  writeNicknameMarker,
+} from '@frm/queue';
 import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
 import { createSyncJob, enqueueSyncJob } from './sync-service.js';
@@ -214,6 +219,13 @@ export async function handleMemberRoleChange({
 
   await enqueueSyncJob(job, { prisma });
 
+  // A role change can change a member's rank, and with it the name their
+  // authoritative guild shows — so re-mirror their name to every guild. Best-effort
+  // and gateway-driven; a failure never blocks the role reconciliation above.
+  await propagateMemberName({ prisma, gateway, discordUserId }).catch((error) => {
+    log.error({ err: serializeError(error), discordUserId }, 'name propagation on role change failed');
+  });
+
   return {
     queued: true,
     reason: 'reconciliation queued',
@@ -317,6 +329,7 @@ export async function handleMemberNicknameChange({
   discordGuildId,
   discordUserId,
   nickname = null,
+  gateway = null,
   prisma = getPrisma(),
 }) {
   const guild = await findApprovedGuildBySnowflake(discordGuildId, prisma);
@@ -334,7 +347,17 @@ export async function handleMemberNicknameChange({
     return { queued: false, reason: 'nickname was written by the platform' };
   }
 
-  // Only rosters that own nicknames, and only for somebody actually on one.
+  // Mirror the member's name across every guild they share with the bot, sourced from
+  // their authoritative guild (see NicknamePriority). An edit in the authoritative guild
+  // spreads outward; an edit anywhere else is pulled back to the authoritative name.
+  try {
+    await propagateMemberName({ prisma, gateway, discordUserId });
+  } catch (error) {
+    log.error({ err: serializeError(error), discordUserId }, 'nickname propagation failed');
+  }
+
+  // The rosters this member holds in *this* guild still need reconciling so the edited
+  // nickname keeps its callsign/rank prefix here.
   const memberships = await prisma.rosterMembership.findMany({
     where: {
       discordUserId,
@@ -344,13 +367,8 @@ export async function handleMemberNicknameChange({
     select: { roster: { select: { id: true, slug: true, approvedGuildId: true } } },
   });
 
-  if (memberships.length === 0) {
-    return { queued: false, reason: 'member is not on a nickname-synchronized roster' };
-  }
-
   const ctx = { ...systemContext({ label: 'discord-event' }), source: ActionSource.DISCORD };
   const jobIds = [];
-
   for (const { roster } of memberships) {
     const job = await queueRosterSync(ctx, {
       roster,
@@ -364,42 +382,22 @@ export async function handleMemberNicknameChange({
     if (job) jobIds.push(job.id);
   }
 
-  // Cross-guild propagation: if this edit is in the member's authoritative guild
-  // (see NicknamePriority), push the new name to their rosters in every other guild
-  // so all their guilds show the same name. An edit in a non-authoritative guild is
-  // left to the reconcile above, which reverts it to the synced name.
-  try {
-    const authority = await resolveNicknameAuthority({ prisma, discordUserId });
-    if (authority && authority.guildId === guild.id) {
-      const propagated = await propagateSyncedName({
-        prisma,
-        ctx,
-        discordUserId,
-        authorityGuildId: guild.id,
-        nickname,
-      });
-      jobIds.push(...propagated);
-    }
-  } catch (error) {
-    log.error({ err: serializeError(error), discordUserId }, 'nickname propagation failed');
-  }
-
-  log.debug({ discordUserId, nickname, jobs: jobIds.length }, 'nickname drift queued');
-  return { queued: jobIds.length > 0, reason: 'nickname reconciliation queued', jobIds };
+  log.debug({ discordUserId, nickname, jobs: jobIds.length }, 'nickname drift handled');
+  return { queued: true, reason: 'nickname reconciliation queued', jobIds };
 }
 
 /**
- * Which guild is the source of a member's name, and at what priority.
+ * The guild whose nickname is the source of a member's name.
  *
  * MAIN (staff/dev/director/owner ranks) wins outright — the main community's name
  * everywhere. Otherwise the highest DEPARTMENT rank makes its own guild the source,
- * for a full-time member whose department name is the one that should show. With
- * neither, the main community is the default source. Returns null when there is
- * nothing to sync across (the member is on nickname rosters in at most one guild).
+ * for a full-time member whose department name should show. With neither, the main
+ * community is the default source. Returns null for a member on no nickname roster at
+ * all: they are not tracked, so their name is their own business.
  *
- * @returns {Promise<{guildId: string, priority: string}|null>}
+ * @returns {Promise<{id: string, discordGuildId: string}|null>}
  */
-async function resolveNicknameAuthority({ prisma, discordUserId }) {
+async function resolveNameAuthorityGuild({ prisma, discordUserId }) {
   const memberships = await prisma.rosterMembership.findMany({
     where: {
       discordUserId,
@@ -408,95 +406,148 @@ async function resolveNicknameAuthority({ prisma, discordUserId }) {
     },
     select: {
       rank: { select: { nicknamePriority: true, position: true } },
-      roster: { select: { approvedGuildId: true, guild: { select: { type: true } } } },
+      roster: {
+        select: { guild: { select: { id: true, discordGuildId: true, type: true } } },
+      },
     },
   });
+  if (memberships.length === 0) return null;
 
-  const guildIds = new Set(memberships.map((m) => m.roster.approvedGuildId));
-  if (guildIds.size < 2) return null; // one guild (or none): nothing to propagate across
-
-  let mainCommunityGuildId = null;
+  let mainCommunityGuild = null;
   let hasMainRank = false;
-  let bestDept = null; // { guildId, position }
+  let bestDept = null; // { guild, position }
   for (const m of memberships) {
+    const guild = m.roster.guild;
+    if (guild?.type === GuildType.MAIN_COMMUNITY) mainCommunityGuild = guild;
     const priority = m.rank?.nicknamePriority ?? NicknamePriority.NONE;
-    const guildId = m.roster.approvedGuildId;
-    if (m.roster.guild?.type === GuildType.MAIN_COMMUNITY) mainCommunityGuildId = guildId;
     if (priority === NicknamePriority.MAIN) hasMainRank = true;
     else if (priority === NicknamePriority.DEPARTMENT) {
       const position = m.rank?.position ?? 0;
-      if (!bestDept || position > bestDept.position) bestDept = { guildId, position };
+      if (!bestDept || position > bestDept.position) bestDept = { guild, position };
     }
   }
 
-  if (hasMainRank && mainCommunityGuildId) {
-    return { guildId: mainCommunityGuildId, priority: NicknamePriority.MAIN };
-  }
-  if (bestDept) return { guildId: bestDept.guildId, priority: NicknamePriority.DEPARTMENT };
-  if (mainCommunityGuildId) {
-    return { guildId: mainCommunityGuildId, priority: NicknamePriority.NONE };
-  }
-  return null;
+  const pick = (guild) => (guild ? { id: guild.id, discordGuildId: guild.discordGuildId } : null);
+
+  if (hasMainRank && mainCommunityGuild) return pick(mainCommunityGuild);
+  if (bestDept) return pick(bestDept.guild);
+  if (mainCommunityGuild) return pick(mainCommunityGuild);
+  // On a roster, but not the main community and no priority rank: fall back to the
+  // configured main community guild so the name still has one source of truth.
+  const main = await prisma.approvedGuild.findFirst({
+    where: { type: GuildType.MAIN_COMMUNITY, enabled: true, ...notDeleted },
+    select: { id: true, discordGuildId: true },
+  });
+  return main ?? null;
 }
 
 /**
- * Locks the member's name in every guild other than the authoritative one to the name
- * they now carry there, and queues those rosters so it applies immediately. Clears the
- * synced name on the authoritative guild's own rows, where the local nickname rules.
- *
- * @returns {Promise<string[]>} the ids of the roster-sync jobs queued
+ * Mirror a member's name from their authoritative guild to every guild they share with
+ * the bot. A guild where they hold a roster rank keeps its own callsign/rank prefix — the
+ * name is set through `syncedName` and a roster reconcile. A guild where they are on no
+ * roster (a staff member sitting in a department server, say) has their nickname set to
+ * the plain name directly. Marks every write so the resulting event is not read back as a
+ * hand edit. Best-effort per guild; needs the gateway, so it is a no-op without one.
  */
-async function propagateSyncedName({ prisma, ctx, discordUserId, authorityGuildId, nickname }) {
-  const name = parseNickname(nickname).name;
-  if (!name) return []; // an empty name is nothing to propagate
+async function propagateMemberName({ prisma, gateway, discordUserId }) {
+  if (!gateway) return { propagated: false, reason: 'no gateway' };
 
-  const memberships = await prisma.rosterMembership.findMany({
+  const authority = await resolveNameAuthorityGuild({ prisma, discordUserId });
+  if (!authority) return { propagated: false, reason: 'member is not on any nickname roster' };
+
+  const authMember = await gateway.getMember(authority.discordGuildId, discordUserId).catch(() => null);
+  if (!authMember) return { propagated: false, reason: 'not in the authoritative guild' };
+  const name = parseNickname(authMember.displayName).name || String(authMember.displayName ?? '').trim();
+  if (!name) return { propagated: false, reason: 'no name to propagate' };
+
+  const guilds = await prisma.approvedGuild.findMany({
+    where: { ...notDeleted, enabled: true, syncEnabled: true, id: { not: authority.id } },
+    select: { id: true, discordGuildId: true },
+  });
+  if (guilds.length === 0) return { propagated: false, reason: 'no other guilds' };
+
+  // Which of those guilds the member holds a nickname roster in: those get the name via
+  // syncedName + a reconcile, so the roster's rank prefix survives.
+  const rosterRows = await prisma.rosterMembership.findMany({
     where: {
       discordUserId,
       status: RosterMembershipStatus.ACTIVE,
-      roster: { ...notDeleted, nicknameSyncEnabled: true },
+      roster: {
+        ...notDeleted,
+        nicknameSyncEnabled: true,
+        approvedGuildId: { in: guilds.map((g) => g.id) },
+      },
     },
     select: { id: true, syncedName: true, roster: { select: { id: true, slug: true, approvedGuildId: true } } },
   });
-
-  const others = memberships.filter((m) => m.roster.approvedGuildId !== authorityGuildId);
-  if (others.length === 0) return [];
-
-  const staleHere = memberships.filter(
-    (m) => m.roster.approvedGuildId === authorityGuildId && m.syncedName !== null,
-  );
-  const needWrite = others.filter((m) => m.syncedName !== name);
-
-  if (needWrite.length > 0) {
-    await prisma.rosterMembership.updateMany({
-      where: { id: { in: needWrite.map((m) => m.id) } },
-      data: { syncedName: name },
-    });
-  }
-  if (staleHere.length > 0) {
-    await prisma.rosterMembership.updateMany({
-      where: { id: { in: staleHere.map((m) => m.id) } },
-      data: { syncedName: null },
-    });
+  const rosterByGuild = new Map();
+  for (const row of rosterRows) {
+    const list = rosterByGuild.get(row.roster.approvedGuildId) ?? [];
+    list.push(row);
+    rosterByGuild.set(row.roster.approvedGuildId, list);
   }
 
+  const ctx = { ...systemContext({ label: 'name-sync' }), source: ActionSource.DISCORD };
   const jobIds = [];
-  const seen = new Set();
-  for (const { roster } of others) {
-    if (seen.has(roster.id)) continue;
-    seen.add(roster.id);
-    const job = await queueRosterSync(ctx, {
-      roster,
+
+  for (const guild of guilds) {
+    const rosterMemberships = rosterByGuild.get(guild.id);
+    if (rosterMemberships?.length) {
+      const toWrite = rosterMemberships.filter((m) => m.syncedName !== name);
+      if (toWrite.length) {
+        await prisma.rosterMembership.updateMany({
+          where: { id: { in: toWrite.map((m) => m.id) } },
+          data: { syncedName: name },
+        });
+      }
+      const rosters = new Map(rosterMemberships.map((m) => [m.roster.id, m.roster]));
+      for (const roster of rosters.values()) {
+        const job = await queueRosterSync(ctx, {
+          roster,
+          discordUserId,
+          reason: 'Name synced from authoritative guild',
+          prisma,
+        }).catch(() => null);
+        if (job) jobIds.push(job.id);
+      }
+      continue;
+    }
+
+    // No roster here: mirror the plain name directly, but only if the member is present
+    // and their nickname does not already read as that name.
+    const member = await gateway.getMember(guild.discordGuildId, discordUserId).catch(() => null);
+    if (!member) continue;
+    const currentName = parseNickname(member.displayName).name || String(member.displayName ?? '').trim();
+    if (currentName === name && String(member.displayName ?? '').trim() === name) continue;
+
+    await writeNicknameMarker({
+      discordGuildId: guild.discordGuildId,
       discordUserId,
-      reason: 'Name synced from authoritative guild',
-      prisma,
-    }).catch((error) => {
-      log.error({ err: serializeError(error), slug: roster.slug }, 'could not queue synced-name sync');
-      return null;
-    });
-    if (job) jobIds.push(job.id);
+      nickname: name,
+    }).catch(() => {});
+    try {
+      await gateway.setNickname(guild.discordGuildId, discordUserId, name, 'FRM name sync');
+    } catch (error) {
+      await discardNicknameMarker({ discordGuildId: guild.discordGuildId, discordUserId }).catch(() => {});
+      log.warn({ err: serializeError(error), guild: guild.discordGuildId }, 'name mirror failed');
+    }
   }
-  return jobIds;
+
+  // The authoritative guild's own rows never carry a synced name — the local nickname
+  // rules there — so clear any left over from a previous authority.
+  await prisma.rosterMembership
+    .updateMany({
+      where: {
+        discordUserId,
+        status: RosterMembershipStatus.ACTIVE,
+        roster: { approvedGuildId: authority.id },
+        syncedName: { not: null },
+      },
+      data: { syncedName: null },
+    })
+    .catch(() => {});
+
+  return { propagated: true, name, jobIds };
 }
 
 /**

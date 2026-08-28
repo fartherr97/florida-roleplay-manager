@@ -110,6 +110,7 @@ export function registerEventHandlers(client, { gateway, env }) {
           discordGuildId: newMember.guild.id,
           discordUserId: newMember.id,
           nickname: newMember.nickname ?? null,
+          gateway,
         }).catch((error) => {
           log.error({ err: serializeError(error) }, 'nickname change handling failed');
         });
