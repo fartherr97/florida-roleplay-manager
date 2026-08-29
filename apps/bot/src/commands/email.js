@@ -8,7 +8,7 @@
  *   add    — set YOUR OWN email. Anyone may. Must be a Gmail address; a non-Gmail gets a
  *            red error and nothing is stored.
  *   check  — a member's email on file. Restricted: the website answers only a caller who
- *            holds `emails.view` (Directorship and up).
+ *            holds `emails.view` (Directorship and up) or a department head role.
  *   search — which member an email belongs to. Same restriction as check.
  *
  * Authorized by the website (for check/search) rather than the bot's actor model, so it
@@ -46,13 +46,13 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName('check')
-      .setDescription("Look up a member's email on file (Directorship+)")
+      .setDescription("Look up a member's email on file (Directorship or dept head)")
       .addUserOption(memberOption(true, 'member', 'The member (or paste their Discord ID)')),
   )
   .addSubcommand((sub) =>
     sub
       .setName('search')
-      .setDescription('Find which member an email belongs to (Directorship+)')
+      .setDescription('Find which member an email belongs to (Directorship or dept head)')
       .addStringOption((option) =>
         option.setName('address').setDescription('The email to search for').setRequired(true).setMaxLength(320),
       ),
@@ -141,7 +141,9 @@ async function handleCheck(interaction, env) {
   });
   if (res.status === 403) {
     return interaction.editReply({
-      embeds: [errorEmbed('Not permitted', "Looking up a member's email needs Directorship or above.")],
+      embeds: [
+        errorEmbed('Not permitted', "Looking up a member's email needs Directorship or a department head role."),
+      ],
     });
   }
   if (!res.ok) throw new Error(`website responded ${res.status}`);
@@ -189,7 +191,7 @@ async function handleSearch(interaction, env) {
   });
   if (res.status === 403) {
     return interaction.editReply({
-      embeds: [errorEmbed('Not permitted', 'Searching emails needs Directorship or above.')],
+      embeds: [errorEmbed('Not permitted', 'Searching emails needs Directorship or a department head role.')],
     });
   }
   if (!res.ok) throw new Error(`website responded ${res.status}`);
