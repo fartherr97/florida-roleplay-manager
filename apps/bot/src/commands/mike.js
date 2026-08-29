@@ -16,7 +16,14 @@ import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getEnv } from '@frm/shared';
 import { createLogger, serializeError } from '@frm/logging';
 import { COLORS, errorEmbed, successEmbed, truncate } from '../lib/ui.js';
-import { DENY_EMOJI, DONE_EMOJI, MIKE_DISCORD_ID, TODO_FOOTER, TODO_TITLE } from '../lib/mikeTodo.js';
+import {
+  DENY_EMOJI,
+  DONE_EMOJI,
+  MIKE_DISCORD_ID,
+  REQUESTED_FIELD,
+  TODO_FOOTER,
+  TODO_TITLE,
+} from '../lib/mikeTodo.js';
 
 const log = createLogger('bot.mike');
 
@@ -57,12 +64,10 @@ export const data = new SlashCommandBuilder()
 export async function execute(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  // A personal list: only its owner may add to it, so nobody else can ping him or fill his channel.
-  if (interaction.user.id !== MIKE_DISCORD_ID) {
-    return interaction.editReply({
-      embeds: [errorEmbed('Not for you', "This is Mike's personal to-do list — only he can add to it.")],
-    });
-  }
+  // Anyone may submit a request to Mike's to-do; the guild allowlist and rate limit in the
+  // guard still apply. Who submitted it is recorded on the post so that when Mike resolves
+  // the item, the DM goes back to them — not to Mike.
+  const requesterId = interaction.user.id;
 
   const env = getEnv();
   if (!env.MIKE_TODO_WEBHOOK_URL) {
@@ -97,7 +102,12 @@ export async function execute(interaction) {
             title: TODO_TITLE,
             description: truncate(item, 4096),
             color: priority.color,
-            fields: [{ name: 'Priority', value: `${priority.emoji} ${priority.label}`, inline: true }],
+            fields: [
+              { name: 'Priority', value: `${priority.emoji} ${priority.label}`, inline: true },
+              // The mention renders as the requester's name and never pings (it is in an
+              // embed field). The reaction handler reads the id back out of it to DM them.
+              { name: REQUESTED_FIELD, value: `<@${requesterId}>`, inline: true },
+            ],
             footer: { text: TODO_FOOTER },
             timestamp: new Date().toISOString(),
           },
@@ -143,15 +153,15 @@ export async function execute(interaction) {
   return interaction.editReply({
     embeds: [
       successEmbed(
-        'Added to your to-do list',
+        "Sent to Mike's to-do list",
         truncate(item, 1024),
         [
           { name: 'Priority', value: `${priority.emoji} ${priority.label}`, inline: true },
           {
-            name: 'Resolve it',
+            name: 'What happens next',
             value: reactable
-              ? `React ${DONE_EMOJI} to complete or ${DENY_EMOJI} to deny — you'll get a DM either way.`
-              : "Posted, but I couldn't add the ✅/❌ reactions (check my channel permissions).",
+              ? 'Mike will check it off or deny it — either way the bot will DM you the outcome.'
+              : "Posted, but I couldn't add the ✅/❌ reactions (an admin should check my channel permissions).",
             inline: false,
           },
         ],

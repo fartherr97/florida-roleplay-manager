@@ -7,12 +7,12 @@
  *
  * The message itself is the store — no database. A to-do is recognised by its embed
  * fingerprint (title + footer), the item text is the embed description, and the person to
- * DM is the command's runner, which is always Mike because `/mike` is gated to him. That
- * keeps the whole feature restart-safe: a posted item still resolves after a redeploy.
+ * DM is read back out of the "Requested by" field, which carries the submitter's mention.
+ * That keeps the whole feature restart-safe: a posted item still resolves after a redeploy.
  */
 import { serializeError } from '@frm/logging';
 
-/** The one person who may run `/mike` and resolve its items; also who gets the DM. */
+/** The one person who resolves items by reacting. Anyone may submit; only Mike checks off. */
 export const MIKE_DISCORD_ID = '173538213728747520';
 
 export const DONE_EMOJI = '✅';
@@ -21,6 +21,9 @@ export const DENY_EMOJI = '❌';
 /** The embed fingerprint that marks a message as a `/mike` to-do. */
 export const TODO_TITLE = '📝 To-Do';
 export const TODO_FOOTER = 'Mike To-Do';
+
+/** The embed field that carries the submitter's mention, so they can be DMed the outcome. */
+export const REQUESTED_FIELD = 'Requested by';
 
 /**
  * Resolves a to-do when Mike reacts to it.
@@ -47,13 +50,19 @@ export async function handleMikeReaction(reaction, user, { log } = {}) {
 
     const content = (embed.description ?? '').trim() || 'your item';
 
-    // The runner is always Mike (the command is gated to him), so that is who is told.
-    const target = await message.client.users.fetch(MIKE_DISCORD_ID);
-    const dm =
-      emoji === DONE_EMOJI
-        ? `✅ Your Mike to-do item was completed: ${content}`
-        : `❌ Your Mike to-do item ${content} has been denied. Reach out to Mike for more details.`;
-    await target.send(dm).catch(() => {});
+    // Tell whoever submitted the item — read their id back out of the "Requested by" field.
+    const requestedField = embed.fields?.find((f) => f.name === REQUESTED_FIELD);
+    const requesterId = requestedField?.value?.match(/<@!?(\d+)>/)?.[1] ?? null;
+    if (requesterId) {
+      const target = await message.client.users.fetch(requesterId).catch(() => null);
+      const dm =
+        emoji === DONE_EMOJI
+          ? `✅ Your Mike to-do item was completed: ${content}`
+          : `❌ Your Mike to-do item ${content} has been denied. Reach out to Mike for more details.`;
+      await target?.send(dm).catch(() => {});
+    } else {
+      log?.warn?.({ messageId: message.id }, 'mike to-do had no requester to DM');
+    }
 
     // A resolved item leaves the channel, checked or denied.
     await message.delete().catch(() => {});
