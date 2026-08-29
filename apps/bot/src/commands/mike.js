@@ -23,6 +23,7 @@ import {
   REQUESTED_FIELD,
   TODO_FOOTER,
   TODO_TITLE,
+  mayUseMike,
 } from '../lib/mikeTodo.js';
 
 const log = createLogger('bot.mike');
@@ -64,12 +65,23 @@ export const data = new SlashCommandBuilder()
 export async function execute(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  // Anyone may submit a request to Mike's to-do; the guild allowlist and rate limit in the
-  // guard still apply. Who submitted it is recorded on the post so that when Mike resolves
-  // the item, the DM goes back to them — not to Mike.
+  const env = getEnv();
+
+  // Community Director and up only. The allowed roles default to the ownership + director
+  // seats and can be overridden with MIKE_ALLOWED_ROLE_IDS. Who submitted it is recorded on
+  // the post so that when Mike resolves the item, the DM goes back to them — not to Mike.
+  if (!mayUseMike(interaction, env.MIKE_ALLOWED_ROLE_IDS)) {
+    return interaction.editReply({
+      embeds: [
+        errorEmbed(
+          'Directors only',
+          "Only Community Directors and above can add to Mike's to-do list.",
+        ),
+      ],
+    });
+  }
   const requesterId = interaction.user.id;
 
-  const env = getEnv();
   if (!env.MIKE_TODO_WEBHOOK_URL) {
     return interaction.editReply({
       embeds: [
