@@ -13,6 +13,7 @@ import * as globalunban from './globalunban.js';
 import * as guild from './guild.js';
 import * as mapping from './mapping.js';
 import * as member from './member.js';
+import * as mike from './mike.js';
 import * as permissions from './permissions.js';
 import * as resync from './resync.js';
 import * as role from './role.js';
@@ -32,6 +33,7 @@ const MODULES = [
   guild,
   mapping,
   member,
+  mike,
   permissions,
   resync,
   role,

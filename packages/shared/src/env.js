@@ -107,6 +107,9 @@ const envSchema = z
     ADMIN_ALERT_WEBHOOK_URL: z.string().min(1).optional(),
     // Discord webhook the global ban/unban commands post their embedded log to.
     MOD_LOG_WEBHOOK_URL: z.string().min(1).optional(),
+    // Discord webhook the `/mike` command posts to-do items to. Optional: the command
+    // reports it is unavailable until it is set.
+    MIKE_TODO_WEBHOOK_URL: z.string().min(1).optional(),
 
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: integerish(4000, { min: 1, max: 65535 }),
