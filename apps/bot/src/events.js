@@ -21,6 +21,7 @@ import {
 } from '@frm/core';
 import { handleInteraction } from './interactions.js';
 import { registerGuildCommands } from './lib/register.js';
+import { handleMikeReaction } from './lib/mikeTodo.js';
 
 const log = createLogger('bot.events');
 
@@ -196,6 +197,16 @@ export function registerEventHandlers(client, { gateway, env }) {
     } catch (error) {
       log.error({ err: serializeError(error) }, 'roleUpdate failed');
     }
+  });
+
+  // --- /mike to-do reactions -----------------------------------------------
+
+  // Mike reacting ✅/❌ on a to-do embed resolves it: DM him and delete the post.
+  // The handler filters to his reactions on our own embeds before touching anything.
+  client.on(Events.MessageReactionAdd, (reaction, user) => {
+    handleMikeReaction(reaction, user, { log }).catch((error) => {
+      log.error({ err: serializeError(error) }, 'mike reaction handler error');
+    });
   });
 
   client.on(Events.Error, (error) => {

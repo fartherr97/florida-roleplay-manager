@@ -2,9 +2,10 @@
  * Discord client construction.
  *
  * Intents are kept to the minimum the platform needs:
- *   - Guilds           guild and role lifecycle events
- *   - GuildMembers     member join/leave/update (privileged: enable it in the portal)
- *   - GuildModeration  audit log entries, used to attribute manual role changes
+ *   - Guilds                guild and role lifecycle events
+ *   - GuildMembers          member join/leave/update (privileged: enable it in the portal)
+ *   - GuildModeration       audit log entries, used to attribute manual role changes
+ *   - GuildMessageReactions the ✅/❌ reactions that resolve a `/mike` to-do (not privileged)
  */
 import { Client, GatewayIntentBits, Options, Partials } from 'discord.js';
 import { createLogger, serializeError } from '@frm/logging';
@@ -15,6 +16,7 @@ export const REQUIRED_INTENTS = [
   GatewayIntentBits.Guilds,
   GatewayIntentBits.GuildMembers,
   GatewayIntentBits.GuildModeration,
+  GatewayIntentBits.GuildMessageReactions,
 ];
 
 /**
@@ -25,7 +27,10 @@ export const REQUIRED_INTENTS = [
 export function createDiscordClient({ cacheMembers = true } = {}) {
   const client = new Client({
     intents: REQUIRED_INTENTS,
-    partials: [Partials.GuildMember],
+    // Message/Reaction/User partials so a reaction on an uncached message — a
+    // webhook-posted `/mike` to-do, or any message from before a restart — still
+    // fires messageReactionAdd instead of being silently dropped.
+    partials: [Partials.GuildMember, Partials.Message, Partials.Reaction, Partials.User],
     // Caching every member of every guild is the single largest memory cost of a
     // multi-guild bot. The worker only ever fetches members it is about to change.
     makeCache: Options.cacheWithLimits({
