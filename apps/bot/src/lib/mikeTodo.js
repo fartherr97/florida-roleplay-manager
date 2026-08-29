@@ -28,9 +28,9 @@ export const REQUESTED_FIELD = 'Requested by';
 /**
  * Community Director and up — the roles allowed to submit a `/mike` to-do.
  *
- * Ownership and the four director seats (Staff, ES, Dev, Civilian); assistant directors
- * are below "Director" and are not included. Override at runtime with the
- * MIKE_ALLOWED_ROLE_IDS env var (comma-separated role ids) without touching this list.
+ * Ownership, the four director seats (Staff, ES, Dev, Civilian) and their assistant
+ * directors. Override at runtime with the MIKE_ALLOWED_ROLE_IDS env var (comma-separated
+ * role ids) without touching this list.
  */
 export const DEFAULT_DIRECTOR_ROLE_IDS = [
   '1534380747689824276', // Owner
@@ -39,6 +39,10 @@ export const DEFAULT_DIRECTOR_ROLE_IDS = [
   '1535994241392582706', // ES Director
   '1535994278193528912', // Dev Director
   '1535994315258724415', // Civilian Director
+  '1542221076216676422', // Asst. Staff Director
+  '1542221112442618027', // Asst. ES Director
+  '1542221148102725642', // Asst. Dev Director
+  '1542221004561190983', // Asst. Civilian Director
 ];
 
 /** The caller's role ids, tolerating both the GuildMember and raw-interaction shapes. */
