@@ -359,16 +359,28 @@ export const whitelistDecisionSchema = z.object({
 // ES Transfer Portal
 // ---------------------------------------------------------------------------
 
-/** Sets the Discord role ids that define membership in a department for transfers. */
-export const setTransferRolesSchema = z.object({
-  // The platform ApprovedGuild id, resolved server side - never a Discord snowflake.
-  guildId: uuid,
-  // Empty clears the set, marking the guild as no longer a transfer endpoint. A department
-  // can define membership by many roles, so this caps at Discord's own per-guild role limit
-  // rather than an arbitrary handful.
-  roleIds: z.array(snowflake).max(250),
-  reason: optionalReason,
-});
+/**
+ * Sets the Discord role ids that define membership in a department for transfers, as two
+ * independent sets: roles stripped from a member leaving the department, and roles granted
+ * to a member joining it. An empty set on a side means the department is not an endpoint in
+ * that direction. Each caps at Discord's own per-guild role limit rather than an arbitrary
+ * handful. The legacy single `roleIds` field is still accepted (it seeds both sets) so an
+ * older client keeps working.
+ */
+export const setTransferRolesSchema = z
+  .object({
+    // The platform ApprovedGuild id, resolved server side - never a Discord snowflake.
+    guildId: uuid,
+    stripRoleIds: z.array(snowflake).max(250).optional(),
+    grantRoleIds: z.array(snowflake).max(250).optional(),
+    // Legacy: a single set that applies to both directions.
+    roleIds: z.array(snowflake).max(250).optional(),
+    reason: optionalReason,
+  })
+  .refine(
+    (value) => value.stripRoleIds !== undefined || value.grantRoleIds !== undefined || value.roleIds !== undefined,
+    { message: 'Provide stripRoleIds and grantRoleIds (or the legacy roleIds).' },
+  );
 
 /** Previews (or requests) a member's move from one department to another. */
 export const transferRequestSchema = z

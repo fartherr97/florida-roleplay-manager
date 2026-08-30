@@ -271,10 +271,14 @@ model ApprovedGuild {
   syncEnabled     Boolean   @default(true)
   /// Named feature flags, e.g. ["mappings", "manual-grants"].
   features        String[]  @default([])
-  /// The Discord role ids that define membership in this department for the transfer
-  /// portal. On a transfer these are stripped from the outgoing department and added in
-  /// the incoming one. Empty on a guild that is not a transfer endpoint.
+  /// Legacy single membership set for the transfer portal. Superseded by the split
+  /// strip/grant sets below; still read as a fallback for departments configured before
+  /// the split, and used to seed both new sets on the first re-save.
   transferRoleIds String[]  @default([])
+  /// Discord role ids stripped from a member LEAVING this department on a transfer.
+  transferStripRoleIds String[] @default([])
+  /// Discord role ids granted to a member JOINING this department on a transfer.
+  transferGrantRoleIds String[] @default([])
   notes           String?
   registeredAt    DateTime  @default(now())
   registeredById  String?   @db.Uuid

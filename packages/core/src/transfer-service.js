@@ -44,14 +44,34 @@ function authorizeTransferRead(ctx) {
   authorize(ctx.actor, { capability: 'transfer.execute', scope: {} });
 }
 
+/**
+ * The roles stripped from a member leaving this department. Falls back to the legacy
+ * single set for a department configured before the strip/grant split was introduced.
+ */
+function stripRolesOf(guild) {
+  const split = guild.transferStripRoleIds ?? [];
+  return split.length > 0 ? split : (guild.transferRoleIds ?? []);
+}
+
+/** The roles granted to a member joining this department (same legacy fallback). */
+function grantRolesOf(guild) {
+  const split = guild.transferGrantRoleIds ?? [];
+  return split.length > 0 ? split : (guild.transferRoleIds ?? []);
+}
+
 /** A guild as the transfer screens want to read it. */
 function toEndpoint(guild) {
+  const stripRoleIds = stripRolesOf(guild);
+  const grantRoleIds = grantRolesOf(guild);
   return {
     id: guild.id,
     name: guild.name,
     type: guild.type,
     discordGuildId: guild.discordGuildId,
-    transferRoleIds: guild.transferRoleIds ?? [],
+    stripRoleIds,
+    grantRoleIds,
+    // Retained for older clients that still read a single field; the union of both sides.
+    transferRoleIds: [...new Set([...stripRoleIds, ...grantRoleIds])],
   };
 }
 
@@ -73,6 +93,8 @@ export async function getTransferConfig(ctx) {
       type: true,
       discordGuildId: true,
       transferRoleIds: true,
+      transferStripRoleIds: true,
+      transferGrantRoleIds: true,
     },
   });
 
@@ -80,8 +102,10 @@ export async function getTransferConfig(ctx) {
 }
 
 /**
- * Sets (or clears) the Discord role ids that define membership in a department for
- * transfers. An empty list marks the guild as no longer a transfer endpoint.
+ * Sets (or clears) the two Discord role sets that define membership in a department for
+ * transfers: the roles stripped from a member leaving it, and the roles granted to a member
+ * joining it. An empty set on a side marks the department as no longer an endpoint in that
+ * direction. A legacy single `roleIds` seeds both sides when the split ones are absent.
  */
 export async function setTransferRoles(ctx, input) {
   const data = parseOrThrow(setTransferRolesSchema, input);
@@ -92,13 +116,29 @@ export async function setTransferRoles(ctx, input) {
 
   // De-duplicate while preserving order: a picker can send the same id twice, and a
   // transfer that tried to add a role twice would only waste a preflight.
-  const roleIds = [...new Set(data.roleIds)];
-  const previous = guild.transferRoleIds ?? [];
+  const legacy = data.roleIds ? [...new Set(data.roleIds)] : null;
+  const stripRoleIds = [...new Set(data.stripRoleIds ?? legacy ?? [])];
+  const grantRoleIds = [...new Set(data.grantRoleIds ?? legacy ?? [])];
+
+  const previous = {
+    stripRoleIds: stripRolesOf(guild),
+    grantRoleIds: grantRolesOf(guild),
+  };
 
   const updated = await prisma.approvedGuild.update({
     where: { id: guild.id },
-    data: { transferRoleIds: roleIds },
-    select: { id: true, name: true, type: true, discordGuildId: true, transferRoleIds: true },
+    // Clear the legacy field on write so it can never disagree with the split sets; the
+    // split sets are now the single source of truth for this department.
+    data: { transferStripRoleIds: stripRoleIds, transferGrantRoleIds: grantRoleIds, transferRoleIds: [] },
+    select: {
+      id: true,
+      name: true,
+      type: true,
+      discordGuildId: true,
+      transferRoleIds: true,
+      transferStripRoleIds: true,
+      transferGrantRoleIds: true,
+    },
   });
 
   await recordAudit(prisma, {
@@ -106,11 +146,14 @@ export async function setTransferRoles(ctx, input) {
     action: AuditAction.TRANSFER_ROLES_SET,
     approvedGuildId: guild.id,
     reason: data.reason,
-    previousState: { transferRoleIds: previous },
-    newState: { transferRoleIds: roleIds },
+    previousState: previous,
+    newState: { stripRoleIds, grantRoleIds },
   });
 
-  log.info({ guildId: guild.id, count: roleIds.length }, 'transfer role set updated');
+  log.info(
+    { guildId: guild.id, strip: stripRoleIds.length, grant: grantRoleIds.length },
+    'transfer role sets updated',
+  );
   return toEndpoint(updated);
 }
 
@@ -122,17 +165,17 @@ async function resolveTransferEndpoints(ctx, data) {
   const from = await resolveApprovedGuild(ctx, data.fromGuildId);
   const to = await resolveApprovedGuild(ctx, data.toGuildId);
 
-  const removeRoleIds = from.transferRoleIds ?? [];
-  const addRoleIds = to.transferRoleIds ?? [];
+  const removeRoleIds = stripRolesOf(from);
+  const addRoleIds = grantRolesOf(to);
 
   if (removeRoleIds.length === 0) {
     throw new PreconditionError(
-      `${from.name} has no transfer roles configured. Configure them before transferring out of it.`,
+      `${from.name} has no "roles removed" set configured. Configure it before transferring out of it.`,
     );
   }
   if (addRoleIds.length === 0) {
     throw new PreconditionError(
-      `${to.name} has no transfer roles configured. Configure them before transferring into it.`,
+      `${to.name} has no "roles added" set configured. Configure it before transferring into it.`,
     );
   }
 
@@ -291,8 +334,8 @@ export async function runTransferJob({ data, gateway, prisma = getPrisma() }) {
     prisma.approvedGuild.findFirst({ where: { id: from.id, ...notDeleted } }),
     prisma.approvedGuild.findFirst({ where: { id: to.id, ...notDeleted } }),
   ]);
-  const allowedRemove = new Set(fromGuild?.transferRoleIds ?? []);
-  const allowedAdd = new Set(toGuild?.transferRoleIds ?? []);
+  const allowedRemove = new Set(fromGuild ? stripRolesOf(fromGuild) : []);
+  const allowedAdd = new Set(toGuild ? grantRolesOf(toGuild) : []);
   const removeRoleIds = (from.removeRoleIds ?? []).filter((roleId) => allowedRemove.has(roleId));
   const addRoleIds = (to.addRoleIds ?? []).filter((roleId) => allowedAdd.has(roleId));
 
