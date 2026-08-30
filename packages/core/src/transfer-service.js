@@ -102,6 +102,30 @@ export async function getTransferConfig(ctx) {
 }
 
 /**
+ * The transfer config for a server-to-server caller (the website's transfer portal, which
+ * applies the role changes itself). Token-gated at the route, so there is no actor here —
+ * this deliberately skips the capability check `getTransferConfig` runs. Returns the same
+ * per-department strip/grant sets, keyed by Discord guild id so the caller can match them
+ * to its own departments.
+ */
+export async function getTransferConfigForService({ prisma = getPrisma() } = {}) {
+  const guilds = await prisma.approvedGuild.findMany({
+    where: { enabled: true, ...notDeleted },
+    orderBy: [{ type: 'asc' }, { name: 'asc' }],
+    select: {
+      id: true,
+      name: true,
+      type: true,
+      discordGuildId: true,
+      transferRoleIds: true,
+      transferStripRoleIds: true,
+      transferGrantRoleIds: true,
+    },
+  });
+  return { guilds: guilds.map(toEndpoint) };
+}
+
+/**
  * Sets (or clears) the two Discord role sets that define membership in a department for
  * transfers: the roles stripped from a member leaving it, and the roles granted to a member
  * joining it. An empty set on a side marks the department as no longer an endpoint in that

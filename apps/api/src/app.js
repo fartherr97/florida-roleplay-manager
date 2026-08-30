@@ -19,6 +19,7 @@ import authRoutes from './routes/auth.js';
 import resourceRoutes from './routes/resources.js';
 import rosterRoutes from './routes/rosters.js';
 import whitelistRoutes from './routes/whitelist.js';
+import transferSyncRoutes from './routes/transfer-sync.js';
 
 /**
  * @param {object} [options]
@@ -103,6 +104,9 @@ export async function buildApp(options = {}) {
       // The whitelist ingest is public too, but token-gated (server-to-server from the
       // website), so it also does not use `fastify.authenticated`.
       await instance.register(whitelistRoutes);
+      // Also token-gated server-to-server: the website reads transfer role config to apply
+      // role changes itself when a ticket is processed.
+      await instance.register(transferSyncRoutes);
       await instance.register(resourceRoutes);
     },
     { prefix: '/api' },
