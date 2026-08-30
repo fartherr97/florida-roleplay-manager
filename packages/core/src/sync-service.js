@@ -246,7 +246,13 @@ export async function getSyncJob(ctx, jobId, { includeActions = true, actionLimi
     include: {
       guild: { select: { id: true, name: true } },
       issues: { where: { resolved: false }, take: 25 },
-      actions: includeActions ? { take: actionLimit, orderBy: { createdAt: 'asc' } } : false,
+      actions: includeActions
+        ? {
+            take: actionLimit,
+            orderBy: { createdAt: 'asc' },
+            include: { guild: { select: { name: true, discordGuildId: true } } },
+          }
+        : false,
       _count: { select: { actions: true, issues: true } },
     },
   });

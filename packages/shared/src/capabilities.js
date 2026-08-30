@@ -395,7 +395,6 @@ const COMMANDS_BY_CAPABILITY = {
   ],
   'sync.member': [
     { name: '/resync member', description: "Resynchronise one member's roles." },
-    { name: '/resync preview', description: 'Preview what a resync would change.' },
     { name: '/resync status', description: "Check a sync job's status." },
   ],
   'sync.guild': [{ name: '/resync guild', description: 'Resynchronise every managed member of a server.' }],
