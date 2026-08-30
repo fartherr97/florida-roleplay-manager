@@ -363,8 +363,10 @@ export const whitelistDecisionSchema = z.object({
 export const setTransferRolesSchema = z.object({
   // The platform ApprovedGuild id, resolved server side - never a Discord snowflake.
   guildId: uuid,
-  // Empty clears the set, marking the guild as no longer a transfer endpoint.
-  roleIds: z.array(snowflake).max(25),
+  // Empty clears the set, marking the guild as no longer a transfer endpoint. A department
+  // can define membership by many roles, so this caps at Discord's own per-guild role limit
+  // rather than an arbitrary handful.
+  roleIds: z.array(snowflake).max(250),
   reason: optionalReason,
 });
 
