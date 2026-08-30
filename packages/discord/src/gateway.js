@@ -13,6 +13,7 @@
  * @property {string} id
  * @property {string} name
  * @property {boolean} available
+ * @property {string|null} ownerId  the guild owner's Discord user id
  * @property {boolean} botPresent
  * @property {boolean} botCanManageRoles
  * @property {boolean} botCanManageChannels
@@ -105,6 +106,7 @@ export class DiscordJsRoleGateway {
       id: guild.id,
       name: guild.name,
       available: guild.available !== false,
+      ownerId: guild.ownerId ?? null,
       botPresent: Boolean(me),
       botCanManageRoles: Boolean(me?.permissions.has(PermissionFlagsBits.ManageRoles)),
       botCanManageChannels: Boolean(me?.permissions.has(PermissionFlagsBits.ManageChannels)),

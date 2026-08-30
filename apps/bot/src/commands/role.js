@@ -118,7 +118,7 @@ export async function execute(interaction, { ctx, gateway }) {
     case 'unmanage':
       return handleUnmanage(interaction, ctx);
     case 'grant':
-      return handleGrant(interaction, ctx);
+      return handleGrant(interaction, ctx, gateway);
     case 'revoke':
       return handleRevoke(interaction, ctx);
     case 'grants':
@@ -231,16 +231,20 @@ async function handleUnmanage(interaction, ctx) {
   });
 }
 
-async function handleGrant(interaction, ctx) {
+async function handleGrant(interaction, ctx, gateway) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const user = interaction.options.getUser('member');
-  const result = await issueGrant(ctx, {
-    discordUserId: user.id,
-    managedRoleId: interaction.options.getString('managed_role_id'),
-    expiresAt: interaction.options.getString('expires') ?? undefined,
-    reason: interaction.options.getString('reason'),
-  });
+  const result = await issueGrant(
+    ctx,
+    {
+      discordUserId: user.id,
+      managedRoleId: interaction.options.getString('managed_role_id'),
+      expiresAt: interaction.options.getString('expires') ?? undefined,
+      reason: interaction.options.getString('reason'),
+    },
+    { gateway },
+  );
 
   return interaction.editReply({
     embeds: [

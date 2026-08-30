@@ -27,6 +27,7 @@ import {
 import { recordAudit } from './audit-service.js';
 import { authorizeAnyScope, isSelf, resolveManagedRole, resolveUser } from './resolve.js';
 import { createSyncJob, enqueueSyncJob } from './sync-service.js';
+import { assertActorAboveRole } from './role-hierarchy.js';
 
 const log = createLogger('core.grant');
 
@@ -36,7 +37,7 @@ const log = createLogger('core.grant');
  * The database write, the audit record and the sync job commit together; the enqueue
  * happens after the commit, because a queue is not transactional.
  */
-export async function issueGrant(ctx, input) {
+export async function issueGrant(ctx, input, { gateway } = {}) {
   const data = parseOrThrow(issueGrantSchema, input);
   const prisma = ctx.prisma ?? getPrisma();
 
@@ -48,6 +49,17 @@ export async function issueGrant(ctx, input) {
     scope: { guildId: managedRole.approvedGuildId },
     target: { userId: user.id, permissionLevel: user.permissionLevel },
   });
+
+  // Beyond the capability gate: an operator may never grant a role at or above their own
+  // highest role. Only enforceable when a gateway is available to read live Discord roles
+  // (the bot always passes one); system/scheduled callers without a gateway skip it.
+  if (gateway) {
+    await assertActorAboveRole(gateway, {
+      discordGuildId: managedRole.guild?.discordGuildId,
+      actorDiscordUserId: ctx.actor?.discordUserId,
+      discordRoleId: managedRole.discordRoleId,
+    });
+  }
 
   // A grant can only ever apply to a role the engine treats as grant-driven. Granting a
   // mapping-driven role would be silently undone on the next reconciliation, which is a

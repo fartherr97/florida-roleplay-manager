@@ -14,6 +14,7 @@ import { createLogger, serializeError } from '@frm/logging';
 import { recordAudit } from './audit-service.js';
 import { notifyModLog } from './notify.js';
 import { systemContext } from './context.js';
+import { assertActorAboveRole } from './role-hierarchy.js';
 
 const log = createLogger('core.temp-role');
 
@@ -72,6 +73,14 @@ export async function addTempRole(
   const addReason =
     String(reason ?? '').trim() || `Temporary role by ${ctx.actor?.user?.displayName ?? 'an operator'}`;
   const expiresAt = new Date(Date.now() + durationMs);
+
+  // An operator may never hand out a role at or above their own — same ceiling Discord's own
+  // Manage Roles enforces. Checked before the add so nothing is written when it is refused.
+  await assertActorAboveRole(gateway, {
+    discordGuildId: guildId,
+    actorDiscordUserId: ctx.actor?.discordUserId,
+    discordRoleId: roleId,
+  });
 
   // Add it first — if Discord refuses, we never write a timer for a role that was not applied.
   await gateway.addRole(guildId, userId, roleId, addReason);

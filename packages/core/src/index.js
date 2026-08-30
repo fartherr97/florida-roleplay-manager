@@ -19,6 +19,7 @@ export * from './permission-service.js';
 export * from './managed-role-service.js';
 export * from './grant-service.js';
 export * from './role-grant-service.js';
+export * from './role-hierarchy.js';
 export * from './access-service.js';
 export * from './transfer-service.js';
 export * from './whitelist-service.js';
