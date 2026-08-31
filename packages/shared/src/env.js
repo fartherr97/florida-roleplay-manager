@@ -148,6 +148,16 @@ const envSchema = z
     WEBSITE_API_URL: z.string().min(1).optional(),
     WEBSITE_BOT_TOKEN: z.string().min(1).optional(),
 
+    // Sonoran CMS / CAD. When a pair is set, a permanent /globalban also bans the
+    // member's Sonoran account in that product (CMS is keyed by Discord id; CAD by the
+    // Sonoran account id resolved through CMS, falling back to the Discord id as a CAD
+    // API ID), and /globalunban lifts the CAD ban. Each product is inert until both of
+    // its values are set. Credentials come from each panel's API integration page.
+    SONORAN_CMS_COMMUNITY_ID: z.string().min(1).optional(),
+    SONORAN_CMS_API_KEY: z.string().min(1).optional(),
+    SONORAN_CAD_COMMUNITY_ID: z.string().min(1).optional(),
+    SONORAN_CAD_API_KEY: z.string().min(1).optional(),
+
     API_TRUST_PROXY: booleanish(false),
     RATE_LIMIT_MAX: integerish(120, { min: 1, max: 100000 }),
     RATE_LIMIT_WINDOW: z.string().min(1).default('1 minute'),

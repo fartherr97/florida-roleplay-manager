@@ -6,7 +6,7 @@
  * and posted to the mod-log webhook.
  */
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
-import { banGlobally } from '@frm/core';
+import { banGlobally, formatSonoranResults } from '@frm/core';
 import { parseDuration } from '@frm/shared';
 import { successEmbed, truncate } from '../lib/ui.js';
 import { memberOption } from '../lib/options.js';
@@ -72,7 +72,12 @@ export async function execute(interaction, { ctx, gateway }) {
       successEmbed(
         'Global ban',
         `Banned <@${targetId}> ${until} in ${result.applied} of ${result.total} registered servers.`,
-        [{ name: 'Per server', value: truncate(lines.join('\n') || '—') }],
+        [
+          { name: 'Per server', value: truncate(lines.join('\n') || '—') },
+          ...(result.sonoran?.length
+            ? [{ name: 'Sonoran', value: truncate(formatSonoranResults(result.sonoran, 'Banned').join('\n')) }]
+            : []),
+        ],
       ),
     ],
   });

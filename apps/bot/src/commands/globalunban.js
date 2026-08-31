@@ -5,7 +5,7 @@
  * at system.manage; audited and posted to the mod-log webhook.
  */
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
-import { unbanGlobally } from '@frm/core';
+import { formatSonoranResults, unbanGlobally } from '@frm/core';
 import { successEmbed, truncate } from '../lib/ui.js';
 import { memberOption } from '../lib/options.js';
 
@@ -47,7 +47,12 @@ export async function execute(interaction, { ctx, gateway }) {
       successEmbed(
         'Global unban',
         `Unbanned <@${targetId}> in ${result.applied} of ${result.total} registered servers.`,
-        [{ name: 'Per server', value: truncate(lines.join('\n') || '—') }],
+        [
+          { name: 'Per server', value: truncate(lines.join('\n') || '—') },
+          ...(result.sonoran?.length
+            ? [{ name: 'Sonoran', value: truncate(formatSonoranResults(result.sonoran, 'Unbanned').join('\n')) }]
+            : []),
+        ],
       ),
     ],
   });

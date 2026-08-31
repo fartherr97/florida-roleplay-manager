@@ -17,6 +17,7 @@ import { createLogger, serializeError } from '@frm/logging';
 import { recordAudit } from './audit-service.js';
 import { notifyModLog } from './notify.js';
 import { systemContext } from './context.js';
+import { applySonoranBan, formatSonoranResults, sonoranConfigured } from './sonoran-service.js';
 
 const log = createLogger('core.moderation');
 
@@ -145,13 +146,32 @@ export async function banGlobally(ctx, { discordUserId, reason, deleteMessageDay
       .catch((error) => log.error({ err: serializeError(error) }, 'failed to record timed ban'));
   }
 
+  // Sonoran CMS/CAD ride along with a PERMANENT ban only. A temp ban would leave a
+  // CMS ban nothing can lift automatically (Sonoran's API has no CMS unban), so temp
+  // bans stay Discord-only and the operator is told so rather than left guessing.
+  let sonoran = [];
+  if (!expiresAt) {
+    sonoran = await applySonoranBan({ discordUserId: id, ban: true }).catch((error) => {
+      log.warn({ err: serializeError(error), discordUserId: id }, 'sonoran ban failed');
+      return [];
+    });
+  } else if (sonoranConfigured()) {
+    sonoran = [
+      {
+        system: 'Sonoran CMS/CAD',
+        status: 'manual',
+        message: 'temp bans stay Discord-only — ban there by hand if needed',
+      },
+    ];
+  }
+
   const expiryText = expiresAt ? `<t:${Math.floor(expiresAt.getTime() / 1000)}:R>` : 'Permanent';
 
   await recordAudit(ctx.prisma, {
     ctx,
     action: AuditAction.MEMBER_GLOBAL_BANNED,
     targetDiscordId: id,
-    newState: { reason: banReason, deleteMessageDays: days, expiresAt: expiresAt?.toISOString() ?? null, appliedIn: applied, guilds: results },
+    newState: { reason: banReason, deleteMessageDays: days, expiresAt: expiresAt?.toISOString() ?? null, appliedIn: applied, guilds: results, sonoran },
     reason: banReason,
   }).catch(() => {});
 
@@ -167,10 +187,13 @@ export async function banGlobally(ctx, { discordUserId, reason, deleteMessageDay
       { name: 'Deleted history', value: days ? `${days} day${days === 1 ? '' : 's'}` : 'None', inline: true },
       { name: 'Reason', value: banReason },
       { name: 'Per server', value: perServerText(results) },
+      ...(sonoran.length
+        ? [{ name: 'Sonoran', value: formatSonoranResults(sonoran, 'Banned').join('\n') }]
+        : []),
     ],
   }).catch(() => {});
 
-  return { discordUserId: id, total: guilds.length, applied, expiresAt, results };
+  return { discordUserId: id, total: guilds.length, applied, expiresAt, results, sonoran };
 }
 
 /**
@@ -201,11 +224,18 @@ export async function unbanGlobally(ctx, { discordUserId, reason, gateway }) {
     })
     .catch(() => {});
 
+  // Lift what Sonoran's API can lift: CAD un-bans automatically; the CMS ban is
+  // reported as a manual step because the CMS API has no unban call.
+  const sonoran = await applySonoranBan({ discordUserId: id, ban: false }).catch((error) => {
+    log.warn({ err: serializeError(error), discordUserId: id }, 'sonoran unban failed');
+    return [];
+  });
+
   await recordAudit(ctx.prisma, {
     ctx,
     action: AuditAction.MEMBER_GLOBAL_UNBANNED,
     targetDiscordId: id,
-    newState: { reason: unbanReason, appliedIn: applied, guilds: results },
+    newState: { reason: unbanReason, appliedIn: applied, guilds: results, sonoran },
     reason: unbanReason,
   }).catch(() => {});
 
@@ -218,10 +248,13 @@ export async function unbanGlobally(ctx, { discordUserId, reason, gateway }) {
       { name: 'Moderator', value: moderatorLabel(ctx), inline: true },
       { name: 'Reason', value: unbanReason },
       { name: 'Per server', value: perServerText(results) },
+      ...(sonoran.length
+        ? [{ name: 'Sonoran', value: formatSonoranResults(sonoran, 'Unbanned').join('\n') }]
+        : []),
     ],
   }).catch(() => {});
 
-  return { discordUserId: id, total: guilds.length, applied, results };
+  return { discordUserId: id, total: guilds.length, applied, results, sonoran };
 }
 
 /**
