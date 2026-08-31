@@ -22,6 +22,7 @@ import {
 import { handleInteraction } from './interactions.js';
 import { registerGuildCommands } from './lib/register.js';
 import { handleMikeReaction } from './lib/mikeTodo.js';
+import { notifySiteMemberChange } from './lib/siteNotify.js';
 
 const log = createLogger('bot.events');
 
@@ -117,6 +118,16 @@ export function registerEventHandlers(client, { gateway, env }) {
         });
       }
 
+      // Any visible change — roles or nickname — nudges the community website so
+      // its roster follows instantly rather than on the next interval sync.
+      if (
+        addedRoleIds.length > 0 ||
+        removedRoleIds.length > 0 ||
+        oldMember.nickname !== newMember.nickname
+      ) {
+        notifySiteMemberChange(newMember.id);
+      }
+
       if (addedRoleIds.length === 0 && removedRoleIds.length === 0) return;
 
       const executorDiscordId = await findRoleChangeExecutor(newMember);
@@ -149,6 +160,7 @@ export function registerEventHandlers(client, { gateway, env }) {
 
   client.on(Events.GuildMemberAdd, async (member) => {
     try {
+      notifySiteMemberChange(member.id);
       await handleMemberJoin({ discordGuildId: member.guild.id, discordUserId: member.id });
     } catch (error) {
       log.error({ err: serializeError(error) }, 'guildMemberAdd failed');
@@ -157,6 +169,7 @@ export function registerEventHandlers(client, { gateway, env }) {
 
   client.on(Events.GuildMemberRemove, async (member) => {
     try {
+      notifySiteMemberChange(member.id);
       await handleMemberLeave({ discordGuildId: member.guild.id, discordUserId: member.id });
     } catch (error) {
       log.error({ err: serializeError(error) }, 'guildMemberRemove failed');
