@@ -158,6 +158,9 @@ const envSchema = z
     WORKER_CONCURRENCY: integerish(5, { min: 1, max: 100 }),
     RECONCILE_CRON: z.string().min(1).default('0 */6 * * *'),
     MAPPING_VALIDATION_CRON: z.string().min(1).default('0 3 * * *'),
+    // Rosters reconcile on their own frequent cadence so the dashboards stay current
+    // without anyone pressing "Sync now"; the sweep is a no-op when nothing changed.
+    ROSTER_SWEEP_CRON: z.string().min(1).default('*/10 * * * *'),
   })
   .transform((value) => {
     // Production must fail closed: development affordances are forced off no matter

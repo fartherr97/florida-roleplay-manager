@@ -101,6 +101,12 @@ export function createMaintenanceProcessor({ gateway }) {
         return { syncJobId: result?.id, status: result?.status };
       }
 
+      case JobName.ROSTER_SWEEP: {
+        // The frequent roster cadence: queue a reconcile for every roster so promotions
+        // and joins land on the dashboards without anyone pressing "Sync now".
+        return runScheduledRosterSweep({ prisma });
+      }
+
       case JobName.EXPIRE_TIMED_BANS: {
         // Lift any temp ban whose time has passed. Cheap when nothing is due.
         return runTimedBanExpiry({ gateway, prisma });

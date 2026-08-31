@@ -50,9 +50,14 @@ async function main() {
       connection,
       concurrency: Math.max(1, Math.floor(env.WORKER_CONCURRENCY / 2)),
     }),
+    // Roster jobs run strictly one at a time. The callsign allocator reads the numbers in
+    // use and then writes — two roster jobs running side by side can both read before
+    // either writes and issue the same callsign twice (the "two 138s" bug). Serialized,
+    // every job sees the previous job's numbers; roster jobs are quick, so the queue keeps
+    // up fine at concurrency 1.
     new Worker(QUEUE_NAMES.ROSTER, createRosterProcessor({ gateway }), {
       connection,
-      concurrency: Math.max(1, Math.floor(env.WORKER_CONCURRENCY / 2)),
+      concurrency: 1,
     }),
     // Transfers are manual and infrequent; a small concurrency keeps a burst of them from
     // contending with role synchronization for Discord's rate limit.

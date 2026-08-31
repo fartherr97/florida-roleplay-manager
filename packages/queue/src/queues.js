@@ -30,6 +30,7 @@ export const JobName = Object.freeze({
   MAPPING_VALIDATION: 'mapping-validation',
   EXPIRE_TIMED_BANS: 'expire-timed-bans',
   EXPIRE_TEMP_ROLES: 'expire-temp-roles',
+  ROSTER_SWEEP: 'roster-sweep',
   ROSTER_MEMBER_SYNC: 'roster-member-sync',
   ROSTER_SYNC: 'roster-sync',
   TRANSFER_EXECUTE: 'transfer-execute',
@@ -47,6 +48,7 @@ const QUEUE_FOR_JOB = Object.freeze({
   [JobName.MAPPING_VALIDATION]: QUEUE_NAMES.MAINTENANCE,
   [JobName.EXPIRE_TIMED_BANS]: QUEUE_NAMES.MAINTENANCE,
   [JobName.EXPIRE_TEMP_ROLES]: QUEUE_NAMES.MAINTENANCE,
+  [JobName.ROSTER_SWEEP]: QUEUE_NAMES.MAINTENANCE,
   // Roster work gets its own queue rather than sharing the sync queue: a roster bug
   // then cannot starve or stall role synchronization, and vice versa.
   [JobName.ROSTER_MEMBER_SYNC]: QUEUE_NAMES.ROSTER,
@@ -145,6 +147,15 @@ export async function scheduleMaintenanceJobs() {
     'mapping-validation',
     { pattern: env.MAPPING_VALIDATION_CRON },
     { name: JobName.MAPPING_VALIDATION, data: { scheduled: true } },
+  );
+
+  // Rosters follow Discord on their own frequent cadence, so the dashboards stay current
+  // without anyone pressing "Sync now" — the button becomes a convenience, not a chore.
+  // Each pass is also what breaks up any duplicate callsigns the allocator finds.
+  await queue.upsertJobScheduler(
+    'roster-sweep',
+    { pattern: env.ROSTER_SWEEP_CRON },
+    { name: JobName.ROSTER_SWEEP, data: { scheduled: true } },
   );
 
   // Lift expired temp bans promptly. A minute of granularity is plenty — a ban set for
