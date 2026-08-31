@@ -27,6 +27,7 @@ import { checkNicknameOperation } from '@frm/discord';
 import { discardNicknameMarker, withMemberLock, writeNicknameMarker } from '@frm/queue';
 import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
+import { mirrorNameToNonRosterGuilds } from './event-service.js';
 import { notifyGlobalAdmins } from './notify.js';
 import { makeCallsignAllocator, planMemberChange, planRosterChanges } from './roster-resolve.js';
 import { queueRosterSync } from './roster-service.js';
@@ -162,6 +163,7 @@ async function reconcile({ job, gateway, prisma }) {
 
   let applied = 0;
   let failed = 0;
+  const renamed = [];
 
   for (const planned of changes) {
     // Their nickname may belong to a higher-priority roster. This one still owns their
@@ -181,8 +183,23 @@ async function reconcile({ job, gateway, prisma }) {
       log.debug({ member: change.discordUserId }, 'member locked elsewhere; skipping');
       continue;
     }
-    if (outcome.result === 'applied') applied += 1;
+    if (outcome.result === 'applied') {
+      applied += 1;
+      if (change.nickname) renamed.push(change.discordUserId);
+    }
     if (outcome.result === 'failed') failed += 1;
+  }
+
+  // A member whose managed nickname just changed here is often the name authority for
+  // their identity in guilds that carry no roster for them - a deputy's plain presence in
+  // the main community. Mirror the freshly-formatted nickname outward now that it is
+  // final, so those guilds show the exact same string. This runs after the rename, never
+  // before, which is what a hand edit in the authority guild needs to reach the main
+  // guild. Loop-safe: the mirror never queues another roster sync.
+  for (const discordUserId of renamed) {
+    await mirrorNameToNonRosterGuilds({ prisma, gateway, discordUserId }).catch((error) => {
+      log.warn({ err: serializeError(error), discordUserId }, 'name mirror after roster write failed');
+    });
   }
 
   return { applied, failed, changes: changes.length };

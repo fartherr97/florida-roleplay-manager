@@ -557,6 +557,78 @@ async function propagateMemberName({ prisma, gateway, discordUserId }) {
 }
 
 /**
+ * Mirror a member's authoritative nickname, verbatim, to every guild that carries no
+ * roster for them — and nothing else.
+ *
+ * This is the loop-safe half of {@link propagateMemberName}: it never queues a roster
+ * sync, so the roster runner can call it the moment it finishes reformatting a member's
+ * managed nickname without the two ever chasing each other. The roster engine already
+ * owns the format in guilds where the member holds a rank; this only touches the guilds
+ * where they do not, so their nickname reads as an exact 1:1 copy of the authority
+ * guild's (callsign, rank and name). Best-effort and idempotent — it re-reads the
+ * authority, skips guilds already in step, and no-ops when there is nothing to mirror.
+ */
+export async function mirrorNameToNonRosterGuilds({ prisma, gateway, discordUserId }) {
+  if (!gateway) return { mirrored: false, reason: 'no gateway' };
+
+  const authority = await resolveNameAuthorityGuild({ prisma, discordUserId });
+  if (!authority) return { mirrored: false, reason: 'no authority' };
+
+  const authMember = await gateway.getMember(authority.discordGuildId, discordUserId).catch(() => null);
+  if (!authMember) return { mirrored: false, reason: 'not in authority guild' };
+  const fullNick = String(authMember.displayName ?? '').trim();
+  if (!fullNick) return { mirrored: false, reason: 'no name' };
+
+  const guilds = await prisma.approvedGuild.findMany({
+    where: { ...notDeleted, enabled: true, syncEnabled: true, id: { not: authority.id } },
+    select: { id: true, discordGuildId: true },
+  });
+  if (guilds.length === 0) return { mirrored: false, reason: 'no other guilds' };
+
+  // Guilds where the member holds a nickname roster keep their own callsign/rank format,
+  // maintained by the roster engine — never overwrite those with the raw authority nick.
+  const rostered = new Set(
+    (
+      await prisma.rosterMembership.findMany({
+        where: {
+          discordUserId,
+          status: RosterMembershipStatus.ACTIVE,
+          roster: {
+            ...notDeleted,
+            nicknameSyncEnabled: true,
+            approvedGuildId: { in: guilds.map((g) => g.id) },
+          },
+        },
+        select: { roster: { select: { approvedGuildId: true } } },
+      })
+    ).map((row) => row.roster.approvedGuildId),
+  );
+
+  let mirrored = 0;
+  for (const guild of guilds) {
+    if (rostered.has(guild.id)) continue;
+    const member = await gateway.getMember(guild.discordGuildId, discordUserId).catch(() => null);
+    if (!member) continue;
+    if (String(member.displayName ?? '').trim() === fullNick) continue;
+
+    await writeNicknameMarker({
+      discordGuildId: guild.discordGuildId,
+      discordUserId,
+      nickname: fullNick,
+    }).catch(() => {});
+    try {
+      await gateway.setNickname(guild.discordGuildId, discordUserId, fullNick, 'FRM name sync');
+      mirrored += 1;
+    } catch (error) {
+      await discardNicknameMarker({ discordGuildId: guild.discordGuildId, discordUserId }).catch(() => {});
+      log.warn({ err: serializeError(error), guild: guild.discordGuildId }, 'name mirror failed');
+    }
+  }
+
+  return { mirrored: true, count: mirrored, name: fullNick };
+}
+
+/**
  * Which of these roles does the platform care about?
  *
  * A role matters when it is a managed role or when it appears on
