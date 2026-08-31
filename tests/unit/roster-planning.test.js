@@ -399,6 +399,31 @@ describe('callsign auto-assignment', () => {
     expect(issued).toEqual(['120', '121']);
   });
 
+  it('breaks up a duplicate callsign in one pass — one keeps it, the other is reissued', () => {
+    // Two Admins both stored as 136: the bug that showed "136 | Admin | Lee" and
+    // "136 | Admin | Jack". A sweep must leave exactly one 136 and move the other.
+    const changes = planRosterChanges({
+      roster,
+      ranks: rangedRanks,
+      memberships: [
+        membership({ discordUserId: 'lee', callsign: '136', rankId: 'r-admin', rank: rangedRanks[1] }),
+        membership({ discordUserId: 'jack', callsign: '136', rankId: 'r-admin', rank: rangedRanks[1] }),
+      ],
+      members: [
+        { id: 'lee', username: 'lee', nickname: '136 | Admin | Lee', roleIds: ['200'] },
+        { id: 'jack', username: 'jack', nickname: '136 | Admin | Jack', roleIds: ['200'] },
+      ],
+    });
+
+    const byUser = new Map(changes.map((c) => [c.discordUserId, c.callsign]));
+    const lee = byUser.get('lee') ?? '136';
+    const jack = byUser.get('jack') ?? '136';
+    expect(lee).not.toBe(jack);
+    expect([lee, jack].filter((n) => n === '136')).toHaveLength(1);
+    // The reissued one stays inside the Admin block (130–139).
+    for (const n of [lee, jack]) expect(Number(n)).toBeGreaterThanOrEqual(130);
+  });
+
   it('persists a callsign even when nickname sync is off', () => {
     const change = planMemberChange({
       roster: { ...roster, nicknameSyncEnabled: false },

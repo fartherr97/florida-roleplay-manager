@@ -100,7 +100,12 @@ export function resolveCallsign(rank, current, allocate) {
   if (current != null && current !== CALLSIGN_UNASSIGNED) {
     const n = numericCallsign(current);
     if (n === null) return current; // a custom, non-numeric callsign is theirs to keep
-    if (n >= range.start && n <= range.end) return current; // already in this block
+    if (n >= range.start && n <= range.end) {
+      // Already in this block — keep it, but only if nobody earlier in this pass has
+      // already claimed the same number. Two members wearing one callsign (e.g. two `136`s)
+      // is the bug this guards: the second holder falls through and is reissued a free one.
+      if (!allocate?.claim || allocate.claim(current)) return current;
+    }
   }
 
   const next = allocate ? allocate(rank) : null;
@@ -125,7 +130,7 @@ export function makeCallsignAllocator(memberships = []) {
     if (n !== null) taken.add(n);
   }
 
-  return (rank) => {
+  const allocate = (rank) => {
     const range = callsignRange(rank);
     if (!range) return null;
     for (let n = range.start; n <= range.end; n += 1) {
@@ -136,6 +141,20 @@ export function makeCallsignAllocator(memberships = []) {
     }
     return null; // the block is full
   };
+
+  /**
+   * Reserve a specific number for the member who already wears it. Returns true when it was
+   * free (and is now theirs), false when someone earlier in the pass already claimed it — so
+   * the caller knows to reissue a fresh one instead of letting two members share a callsign.
+   */
+  allocate.claim = (value) => {
+    const n = numericCallsign(value);
+    if (n === null || taken.has(n)) return false;
+    taken.add(n);
+    return true;
+  };
+
+  return allocate;
 }
 
 /**
@@ -305,9 +324,12 @@ export function planRosterChanges({ roster, ranks, memberships, members }) {
   const seen = new Set();
   const changes = [];
 
-  // One allocator for the whole pass, seeded from the numbers already in use, so a sweep
-  // that issues several callsigns at once never hands out the same one twice.
-  const allocateCallsign = makeCallsignAllocator(memberships);
+  // One allocator for the whole pass. It starts empty because every active member is
+  // resolved in this pass and claims their own number as we go — seeding it from all
+  // memberships up front would make a member's own callsign look "taken" and reissue it.
+  // Claiming as we go both prevents new collisions and breaks up existing duplicates: the
+  // first holder of a number keeps it, later holders are reissued a free one.
+  const allocateCallsign = makeCallsignAllocator([]);
   const nicknameSync = roster.nicknameSyncEnabled !== false;
 
   for (const membership of memberships) {
