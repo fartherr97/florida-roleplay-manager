@@ -445,9 +445,11 @@ async function resolveNameAuthorityGuild({ prisma, discordUserId }) {
  * Mirror a member's name from their authoritative guild to every guild they share with
  * the bot. A guild where they hold a roster rank keeps its own callsign/rank prefix — the
  * name is set through `syncedName` and a roster reconcile. A guild where they are on no
- * roster (a staff member sitting in a department server, say) has their nickname set to
- * the plain name directly. Marks every write so the resulting event is not read back as a
- * hand edit. Best-effort per guild; needs the gateway, so it is a no-op without one.
+ * roster (a staff member sitting in a department server, say) gets an exact 1:1 copy of
+ * the authority guild's whole nickname — callsign, rank and name — so their identity reads
+ * identically everywhere the bot can see them. Marks every write so the resulting event is
+ * not read back as a hand edit. Best-effort per guild; needs the gateway, so it is a no-op
+ * without one.
  */
 async function propagateMemberName({ prisma, gateway, discordUserId }) {
   if (!gateway) return { propagated: false, reason: 'no gateway' };
@@ -459,6 +461,11 @@ async function propagateMemberName({ prisma, gateway, discordUserId }) {
   if (!authMember) return { propagated: false, reason: 'not in the authoritative guild' };
   const name = parseNickname(authMember.displayName).name || String(authMember.displayName ?? '').trim();
   if (!name) return { propagated: false, reason: 'no name to propagate' };
+  // The authority guild's whole nickname, verbatim — for guilds where the member is on no
+  // local roster. It already fits Discord's 32-char cap because it exists as a nickname
+  // there, so it can be copied across without re-truncation. A guild where they *do* hold
+  // a roster still uses `name` + that roster's own format, below.
+  const fullNick = String(authMember.displayName ?? '').trim() || name;
 
   const guilds = await prisma.approvedGuild.findMany({
     where: { ...notDeleted, enabled: true, syncEnabled: true, id: { not: authority.id } },
@@ -513,20 +520,19 @@ async function propagateMemberName({ prisma, gateway, discordUserId }) {
       continue;
     }
 
-    // No roster here: mirror the plain name directly, but only if the member is present
-    // and their nickname does not already read as that name.
+    // No roster here: mirror the authority guild's whole nickname verbatim, so this guild
+    // shows an exact 1:1 copy — callsign, rank and name. Skip if it already matches.
     const member = await gateway.getMember(guild.discordGuildId, discordUserId).catch(() => null);
     if (!member) continue;
-    const currentName = parseNickname(member.displayName).name || String(member.displayName ?? '').trim();
-    if (currentName === name && String(member.displayName ?? '').trim() === name) continue;
+    if (String(member.displayName ?? '').trim() === fullNick) continue;
 
     await writeNicknameMarker({
       discordGuildId: guild.discordGuildId,
       discordUserId,
-      nickname: name,
+      nickname: fullNick,
     }).catch(() => {});
     try {
-      await gateway.setNickname(guild.discordGuildId, discordUserId, name, 'FRM name sync');
+      await gateway.setNickname(guild.discordGuildId, discordUserId, fullNick, 'FRM name sync');
     } catch (error) {
       await discardNicknameMarker({ discordGuildId: guild.discordGuildId, discordUserId }).catch(() => {});
       log.warn({ err: serializeError(error), guild: guild.discordGuildId }, 'name mirror failed');
