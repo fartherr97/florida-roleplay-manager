@@ -410,7 +410,9 @@ export async function getRoster(ctx, slug) {
   authorize(ctx.actor, { capability: 'roster.view', scope: {} });
   const prisma = ctx.prisma ?? getPrisma();
   const roster = await requireRoster(prisma, slug, ROSTER_INCLUDE);
-  return presentRoster(roster);
+  // The platform guild id is added only on this authenticated management read (never the
+  // public one) so the dashboard can offer that server's roles when binding a rank.
+  return { ...presentRoster(roster), approvedGuildId: roster.approvedGuildId };
 }
 
 /**
