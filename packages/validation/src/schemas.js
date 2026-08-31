@@ -353,6 +353,9 @@ export const whitelistSubmissionSchema = z.object({
 export const whitelistDecisionSchema = z.object({
   submissionId: uuid,
   decision: z.enum(['approve', 'deny']),
+  // Required in practice for a denial (the bot collects it in a modal); it is shown on the
+  // review message and sent to the applicant in their denial DM.
+  reason: z.string().trim().max(1000).optional(),
 });
 
 // ---------------------------------------------------------------------------

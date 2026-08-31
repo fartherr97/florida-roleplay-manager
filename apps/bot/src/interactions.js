@@ -5,7 +5,13 @@
  * arrives, so the guard and the error handling cannot be bypassed by forgetting them in
  * an individual command.
  */
-import { MessageFlags } from 'discord.js';
+import {
+  ActionRowBuilder,
+  MessageFlags,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} from 'discord.js';
 import { createLogger, serializeError } from '@frm/logging';
 import { decideWhitelist, discordContext, recordFailure, resolveDiscordActor } from '@frm/core';
 import { AuditAction, newRequestId } from '@frm/shared';
@@ -32,6 +38,11 @@ export async function handleInteraction(interaction, { gateway }) {
   // collector like the interactive commands use.
   if (interaction.isButton() && interaction.customId?.startsWith('wl:')) {
     return handleWhitelistButton(interaction, { gateway });
+  }
+
+  // The deny reason comes back as a modal submission tied to the same submission.
+  if (interaction.isModalSubmit() && interaction.customId?.startsWith('wl:denysubmit:')) {
+    return handleWhitelistDenyModal(interaction, { gateway });
   }
 
   if (!interaction.isChatInputCommand()) {
@@ -111,40 +122,42 @@ async function handleWhitelistButton(interaction, { gateway }) {
   const [, decision, submissionId] = (interaction.customId ?? '').split(':');
   if ((decision !== 'approve' && decision !== 'deny') || !submissionId) return undefined;
 
-  const requestId = newRequestId();
-
-  let ctx;
-  try {
-    const actor = await resolveDiscordActor({
-      discordUserId: interaction.user.id,
-      displayName:
-        interaction.member?.displayName ?? interaction.user?.globalName ?? interaction.user?.username ?? null,
-      gateway,
-    });
-    ctx = discordContext(actor, { requestId, discordGuildId: interaction.guildId });
-  } catch {
-    await interaction
-      .reply({
-        content: 'Your Discord account is not linked to a platform member, so you cannot review this.',
-        flags: MessageFlags.Ephemeral,
-      })
-      .catch(() => {});
+  // Deny asks for a reason first: pop a modal, then finish in handleWhitelistDenyModal.
+  // The modal is its own interaction response, so it must be shown before any defer/reply.
+  if (decision === 'deny') {
+    const modal = new ModalBuilder()
+      .setCustomId(`wl:denysubmit:${submissionId}`)
+      .setTitle('Deny whitelist application')
+      .addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('reason')
+            .setLabel('Reason (sent to the applicant)')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setMaxLength(1000),
+        ),
+      );
+    await interaction.showModal(modal).catch(() => {});
     return undefined;
   }
+
+  const requestId = newRequestId();
+  const ctx = await reviewerContext(interaction, { gateway, requestId });
+  if (!ctx) return undefined;
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
   try {
-    const result = await decideWhitelist(ctx, { submissionId, decision }, { gateway });
+    const result = await decideWhitelist(ctx, { submissionId, decision: 'approve' }, { gateway });
     let content;
     if (result.alreadyHandled) {
       content = `This application was already ${String(result.status).toLowerCase()}.`;
-    } else if (decision === 'approve') {
-      content = result.roleResult?.assigned
-        ? 'Approved — the whitelist role was assigned.'
-        : `Approved, but the role was not assigned: ${result.roleResult?.message ?? 'unknown error'}`;
+    } else if (result.roleResult?.assigned) {
+      content = 'Approved — the whitelist role was assigned.';
+      await dmApplicant(interaction, result.discordUserId, approvalDm());
     } else {
-      content = 'Application denied.';
+      content = `Approved, but the role was not assigned: ${result.roleResult?.message ?? 'unknown error'}`;
     }
     await interaction.editReply({ content }).catch(() => {});
   } catch (error) {
@@ -154,6 +167,108 @@ async function handleWhitelistButton(interaction, { gateway }) {
       .catch(() => {});
   }
   return undefined;
+}
+
+/** The deny reason has come back — record the denial and DM the applicant why. */
+async function handleWhitelistDenyModal(interaction, { gateway }) {
+  const submissionId = (interaction.customId ?? '').split(':')[2];
+  if (!submissionId) return undefined;
+  const reason = interaction.fields.getTextInputValue('reason')?.trim() || 'No reason provided.';
+
+  const requestId = newRequestId();
+  const ctx = await reviewerContext(interaction, { gateway, requestId });
+  if (!ctx) return undefined;
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+
+  try {
+    const result = await decideWhitelist(ctx, { submissionId, decision: 'deny', reason }, { gateway });
+    if (result.alreadyHandled) {
+      await interaction
+        .editReply({ content: `This application was already ${String(result.status).toLowerCase()}.` })
+        .catch(() => {});
+      return undefined;
+    }
+    const dmSent = await dmApplicant(interaction, result.discordUserId, denialDm(result.reason ?? reason));
+    await interaction
+      .editReply({
+        content: dmSent
+          ? 'Application denied — the applicant was DMed the reason.'
+          : "Application denied, but I couldn't DM the applicant (their DMs may be closed).",
+      })
+      .catch(() => {});
+  } catch (error) {
+    log.warn({ err: serializeError(error), submissionId, requestId }, 'whitelist denial failed');
+    await interaction
+      .editReply({ content: error?.userMessage ?? error?.message ?? 'That could not be processed.' })
+      .catch(() => {});
+  }
+  return undefined;
+}
+
+/** Builds the reviewing staff member's context, replying with the reason it failed. */
+async function reviewerContext(interaction, { gateway, requestId }) {
+  try {
+    const actor = await resolveDiscordActor({
+      discordUserId: interaction.user.id,
+      displayName:
+        interaction.member?.displayName ?? interaction.user?.globalName ?? interaction.user?.username ?? null,
+      gateway,
+    });
+    return discordContext(actor, { requestId, discordGuildId: interaction.guildId });
+  } catch {
+    await interaction
+      .reply({
+        content: 'Your Discord account is not linked to a platform member, so you cannot review this.',
+        flags: MessageFlags.Ephemeral,
+      })
+      .catch(() => {});
+    return null;
+  }
+}
+
+/** DMs the applicant. Returns whether it was delivered (false when their DMs are closed). */
+async function dmApplicant(interaction, discordUserId, payload) {
+  if (!discordUserId) return false;
+  try {
+    const user = await interaction.client.users.fetch(discordUserId);
+    await user.send(payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const SUPPORT_URL = 'https://www.flrp.us/support';
+
+function denialDm(reason) {
+  return {
+    embeds: [
+      {
+        title: 'Whitelist application denied',
+        description:
+          `Your whitelist application to **Florida Roleplay** was denied.\n\n` +
+          `**Reason:** ${reason}\n\n` +
+          `Any further questions or appeals should be opened in a ticket on our support ` +
+          `website at ${SUPPORT_URL}.`,
+        color: 0xef4444,
+      },
+    ],
+  };
+}
+
+function approvalDm() {
+  return {
+    embeds: [
+      {
+        title: 'Whitelist application approved',
+        description:
+          `Your whitelist application to **Florida Roleplay** was approved — welcome! ` +
+          `You've been given the Whitelisted Member role and can now join the in-game server.`,
+        color: 0x22c55e,
+      },
+    ],
+  };
 }
 
 /**

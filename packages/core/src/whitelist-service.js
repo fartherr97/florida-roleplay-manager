@@ -75,20 +75,21 @@ function buildReviewPayload(submission) {
 }
 
 /** The message payload after a decision: the outcome, and no buttons. */
-function buildDecidedPayload(submission, { reviewerDiscordId, roleResult }) {
+function buildDecidedPayload(submission, { reviewerDiscordId, roleResult, reason = null }) {
   const approved = submission.status === 'APPROVED';
   const reviewer = reviewerDiscordId ? `<@${reviewerDiscordId}>` : 'a staff member';
   const roleNote =
     approved && roleResult && !roleResult.assigned
       ? `\n⚠️ The whitelist role was not assigned: ${roleResult.message}`
       : '';
+  const reasonNote = !approved && reason ? `\n**Reason:** ${reason}` : '';
   const outcome = approved ? `✅ Approved by ${reviewer}` : `❌ Denied by ${reviewer}`;
 
   return {
     embeds: [
       {
         title: 'Whitelist application',
-        description: `From <@${submission.discordUserId}> (${submission.username})\n\n${outcome}${roleNote}`,
+        description: `From <@${submission.discordUserId}> (${submission.username})\n\n${outcome}${reasonNote}${roleNote}`,
         color: approved ? COLORS.approved : COLORS.denied,
         fields: answerFields(submission),
         footer: { text: `Submission ${submission.id}` },
@@ -211,6 +212,7 @@ export async function decideWhitelist(ctx, input, { gateway }) {
   }
 
   const reviewerDiscordId = ctx.actor?.discordUserId ?? null;
+  const reason = data.decision === 'deny' ? (data.reason ?? '').trim() || null : null;
   const roleResult =
     data.decision === 'approve'
       ? await assignWhitelistRole({ discordUserId: submission.discordUserId, env, gateway })
@@ -227,7 +229,7 @@ export async function decideWhitelist(ctx, input, { gateway }) {
       token: env.DISCORD_BOT_TOKEN,
       channelId: updated.channelId,
       messageId: updated.messageId,
-      body: buildDecidedPayload(updated, { reviewerDiscordId, roleResult }),
+      body: buildDecidedPayload(updated, { reviewerDiscordId, roleResult, reason }),
     }).catch((error) => {
       log.error({ err: serializeError(error), id: updated.id }, 'could not update whitelist message');
     });
@@ -237,10 +239,12 @@ export async function decideWhitelist(ctx, input, { gateway }) {
     ctx,
     action: status === 'APPROVED' ? AuditAction.WHITELIST_APPROVED : AuditAction.WHITELIST_DENIED,
     targetDiscordId: submission.discordUserId,
+    reason,
     newState: {
       submissionId: submission.id,
       roleAssigned: roleResult?.assigned ?? false,
       roleMessage: roleResult?.message ?? null,
+      denialReason: reason,
     },
   }).catch(() => {});
 
@@ -248,5 +252,6 @@ export async function decideWhitelist(ctx, input, { gateway }) {
     { id: submission.id, status, reviewer: reviewerDiscordId, roleAssigned: roleResult?.assigned },
     'whitelist decided',
   );
-  return { status, roleResult };
+  // discordUserId and reason are returned so the bot can DM the applicant with the outcome.
+  return { status, roleResult, discordUserId: submission.discordUserId, reason };
 }

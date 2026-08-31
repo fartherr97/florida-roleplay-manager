@@ -137,7 +137,9 @@ const envSchema = z
     // every value is set.
     WHITELIST_INGEST_TOKEN: z.string().min(1).optional(),
     WHITELIST_REVIEW_CHANNEL_ID: z.string().regex(SNOWFLAKE).optional(),
-    WHITELIST_ROLE_ID: z.string().regex(SNOWFLAKE).optional(),
+    // The "FLRP Whitelisted Member" role granted on approval — members need it to enter the
+    // in-game server. Defaulted so approval works out of the box; override to change it.
+    WHITELIST_ROLE_ID: z.string().regex(SNOWFLAKE).default('1534380773329600562'),
 
     // The community website, which owns disciplinary records. `/bgcheck` calls it
     // to read a member's folded record and post the embed it builds. The token is
