@@ -140,6 +140,9 @@ const envSchema = z
     // The "FLRP Whitelisted Member" role granted on approval — members need it to enter the
     // in-game server. Defaulted so approval works out of the box; override to change it.
     WHITELIST_ROLE_ID: z.string().regex(SNOWFLAKE).default('1534380773329600562'),
+    // The staff role pinged above each new application in the review channel. Defaulted to
+    // the Server Staff Team role; set to empty to post the applications with no ping.
+    WHITELIST_REVIEW_PING_ROLE_ID: z.string().regex(SNOWFLAKE).or(z.literal('')).default('1534380749304889384'),
 
     // The community website, which owns disciplinary records. `/bgcheck` calls it
     // to read a member's folded record and post the embed it builds. The token is

@@ -51,8 +51,13 @@ function answerFields(submission) {
 }
 
 /** The review message payload: the answers plus Approve/Deny buttons. */
-function buildReviewPayload(submission) {
+function buildReviewPayload(submission, { pingRoleId = '' } = {}) {
+  // Ping the staff team above the embed so a new application is not missed. The
+  // allowed_mentions list is what makes the ping actually notify - without it the
+  // <@&...> would render but stay silent.
+  const content = pingRoleId ? `<@&${pingRoleId}>` : undefined;
   return {
+    ...(content ? { content, allowed_mentions: { roles: [pingRoleId] } } : {}),
     embeds: [
       {
         title: 'Whitelist application',
@@ -130,7 +135,7 @@ export async function submitWhitelist(input) {
     const message = await postChannelMessage({
       token: env.DISCORD_BOT_TOKEN,
       channelId: env.WHITELIST_REVIEW_CHANNEL_ID,
-      body: buildReviewPayload(submission),
+      body: buildReviewPayload(submission, { pingRoleId: env.WHITELIST_REVIEW_PING_ROLE_ID }),
     });
     await prisma.whitelistSubmission.update({
       where: { id: submission.id },
