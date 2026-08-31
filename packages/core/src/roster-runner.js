@@ -29,7 +29,7 @@ import { recordAudit } from './audit-service.js';
 import { systemContext } from './context.js';
 import { mirrorNameToNonRosterGuilds } from './event-service.js';
 import { notifyGlobalAdmins } from './notify.js';
-import { makeCallsignAllocator, planMemberChange, planRosterChanges } from './roster-resolve.js';
+import { makeCallsignAllocator, planMemberChange, planRosterChanges, resolveRank } from './roster-resolve.js';
 import { queueRosterSync } from './roster-service.js';
 
 const log = createLogger('core.roster-runner');
@@ -134,11 +134,18 @@ async function reconcile({ job, gateway, prisma }) {
   // Keep each rank's stored colour in step with its Discord role, so the website can
   // band the roster in the same colours staff see in Discord. Cheap: one role listing,
   // and a write only for the ranks whose colour actually changed.
-  await syncRankColors({ roster, discordGuildId, gateway, prisma });
+  const guildRoles = await syncRankColors({ roster, discordGuildId, gateway, prisma });
+
+  // A rank bound to a role id that does not exist in this server can never match
+  // anybody, and the sync would otherwise report a silent "0 changes" forever. Flag it
+  // where the dashboard shows it. Best-effort - a flagging failure never stops the sync.
+  await flagUnboundRanks({ job, roster, discordGuildId, guildRoles, prisma }).catch((error) => {
+    log.warn({ err: serializeError(error), slug: roster.slug }, 'could not flag unbound ranks');
+  });
 
   const changes = single
     ? await planOne({ roster, discordGuildId, discordUserId: single, gateway, prisma })
-    : await planAll({ roster, discordGuildId, gateway, prisma });
+    : await planAll({ job, roster, discordGuildId, gateway, prisma });
 
   if (changes.length === 0) return { applied: 0, failed: 0, changes: 0 };
 
@@ -369,7 +376,7 @@ async function syncRankColors({ roster, discordGuildId, gateway, prisma }) {
     log.debug({ err: serializeError(error), slug: roster.slug }, 'could not list roles for colours');
     return [];
   });
-  if (roles.length === 0) return;
+  if (roles.length === 0) return roles;
 
   const colorById = new Map(roles.map((role) => [role.id, role.color ?? null]));
   for (const rank of roster.ranks) {
@@ -381,14 +388,100 @@ async function syncRankColors({ roster, discordGuildId, gateway, prisma }) {
       rank.color = next;
     }
   }
+  return roles;
+}
+
+/**
+ * Raises a sync issue for every rank bound to a role id that does not exist in the
+ * roster's server.
+ *
+ * Such a rank matches nobody, ever - the id was usually copied from a different server -
+ * and without this flag the only symptom is a sync that completes with zero changes,
+ * which reads as "working, roster just empty". Deduplicated: an unresolved issue for the
+ * same role in the same guild is not raised twice, so the ten-minute sweep does not pile
+ * up copies.
+ */
+async function flagUnboundRanks({ job, roster, discordGuildId, guildRoles, prisma }) {
+  // An empty listing means the role fetch failed, not that the guild has no roles -
+  // there is nothing trustworthy to validate against.
+  if (!guildRoles || guildRoles.length === 0) return;
+
+  const known = new Set(guildRoles.map((role) => role.id));
+  for (const rank of roster.ranks) {
+    if (known.has(rank.discordRoleId)) continue;
+
+    const existing = await prisma.syncIssue.findFirst({
+      where: {
+        type: SyncIssueType.INVALID_ROLE_REFERENCE,
+        resolved: false,
+        discordRoleId: rank.discordRoleId,
+        approvedGuildId: roster.approvedGuildId,
+      },
+      select: { id: true },
+    });
+    if (existing) continue;
+
+    log.warn(
+      { slug: roster.slug, rank: rank.name, roleId: rank.discordRoleId },
+      'rank bound to a role that does not exist in this guild',
+    );
+    await recordIssue({
+      prisma,
+      job,
+      roster,
+      discordGuildId,
+      discordUserId: null,
+      userId: null,
+      discordRoleId: rank.discordRoleId,
+      type: SyncIssueType.INVALID_ROLE_REFERENCE,
+      severity: IssueSeverity.ERROR,
+      message:
+        `Rank "${rank.name}" on roster "${roster.slug}" is bound to role ${rank.discordRoleId}, ` +
+        'but no role with that id exists in this server, so nobody can ever hold it. The id was ' +
+        'probably copied from a different server - re-bind the rank to a role that lives in this one.',
+      retryable: false,
+    });
+  }
 }
 
 /** Plans the whole roster: the scheduled sweep and `/roster sync`. */
-async function planAll({ roster, discordGuildId, gateway, prisma }) {
+async function planAll({ job, roster, discordGuildId, gateway, prisma }) {
   const [members, memberships] = await Promise.all([
     gateway.listMembers(discordGuildId),
     prisma.rosterMembership.findMany({ where: { rosterId: roster.id }, include: { rank: true } }),
   ]);
+
+  // A guild always contains at least the bot itself, so an empty member list is a failed
+  // fetch (Server Members Intent missing, or the gateway chunk timing out) - never a real
+  // state. Reconciling against it would read as the entire roster resigning at once, so
+  // the roster is left untouched and the failure is recorded where the dashboard shows it.
+  if (members.length === 0) {
+    log.warn({ slug: roster.slug, discordGuildId }, 'member list came back empty; roster left untouched');
+    await recordIssue({
+      prisma,
+      job,
+      roster,
+      discordGuildId,
+      discordUserId: null,
+      userId: null,
+      type: SyncIssueType.GUILD_UNAVAILABLE,
+      severity: IssueSeverity.ERROR,
+      message:
+        `The member list for this server came back empty, so "${roster.name}" was not reconciled. ` +
+        'Check that the bot is in the server and has the Server Members Intent enabled; the next sync will retry.',
+      retryable: true,
+    });
+    return [];
+  }
+
+  log.info(
+    {
+      slug: roster.slug,
+      scanned: members.length,
+      matching: members.filter((member) => resolveRank(roster.ranks, member.roleIds ?? [])).length,
+    },
+    'planning roster from full member list',
+  );
 
   return planRosterChanges({ roster, ranks: roster.ranks, memberships, members });
 }
@@ -589,6 +682,7 @@ function recordIssue({
   discordGuildId,
   discordUserId,
   userId,
+  discordRoleId = null,
   type,
   severity,
   message,
@@ -603,6 +697,7 @@ function recordIssue({
         discordGuildId,
         discordUserId,
         userId,
+        discordRoleId,
         syncJobId: job.id,
         message,
         details: { retryable: Boolean(retryable), roster: roster.slug },
