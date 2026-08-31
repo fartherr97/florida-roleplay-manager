@@ -14,6 +14,7 @@ import {
   planRosterChanges,
   presentRoster,
   resolveCallsign,
+  resolveRank,
 } from '../../packages/core/src/roster-resolve.js';
 
 const roster = {
@@ -51,6 +52,31 @@ const membership = (overrides = {}) => ({
   callsign: '165',
   displayName: 'Mike',
   ...overrides,
+});
+
+describe('resolveRank with a required second role (Auxiliary Staff)', () => {
+  // Aux is the Server Staff role (900) gated on also holding Department Head (950), and
+  // sits below the real staff ranks so a genuine rank always wins.
+  const gatedRanks = [
+    { id: 'r-aux', discordRoleId: '900', requiresRoleId: '950', name: 'Auxiliary Staff', position: 5 },
+    { id: 'r-mod', discordRoleId: '100', name: 'Moderator', position: 10 },
+  ];
+
+  it('places a dept head who holds both Server Staff and Department Head as Aux', () => {
+    expect(resolveRank(gatedRanks, ['900', '950']).name).toBe('Auxiliary Staff');
+  });
+
+  it('does not place a plain Server Staff holder (no Department Head) on the roster', () => {
+    expect(resolveRank(gatedRanks, ['900'])).toBeNull();
+  });
+
+  it('lets a real staff rank win over Aux even when both gates are met', () => {
+    expect(resolveRank(gatedRanks, ['900', '950', '100']).name).toBe('Moderator');
+  });
+
+  it('ignores the gate role on its own', () => {
+    expect(resolveRank(gatedRanks, ['950'])).toBeNull();
+  });
 });
 
 describe('planMemberChange', () => {

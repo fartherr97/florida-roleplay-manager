@@ -539,6 +539,11 @@ model RosterRank {
   rosterId      String    @db.Uuid
   /// The role in the roster's guild that confers this rank.
   discordRoleId String
+  /// Optional second role a member must ALSO hold for this rank to apply. Lets a rank
+  /// mean "holds both roles at once" — e.g. an Auxiliary Staff rank that is the Server
+  /// Staff role gated on also being a Department Head. Null means the role above is
+  /// enough on its own.
+  requiresRoleId String?
   name          String
   /// The abbreviated form used in nicknames, e.g. "Jr. Admin". Falls back to `name`.
   shortName     String?

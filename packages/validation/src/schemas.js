@@ -467,6 +467,10 @@ export const bindRosterRankSchema = z
     // Whose name wins across guilds for someone holding this rank: MAIN forces the
     // main community's name, DEPARTMENT this guild's, NONE follows the default.
     nicknamePriority: z.enum(['NONE', 'MAIN', 'DEPARTMENT']).optional(),
+    // Optional second role a member must ALSO hold for this rank to apply, so a rank can
+    // mean "holds both roles at once" (e.g. Auxiliary Staff = Server Staff + Dept Head).
+    // Explicit null clears the gate; undefined leaves it alone.
+    requiresRoleId: snowflake.nullish(),
     reason: optionalReason,
   })
   .refine((data) => (data.callsignRangeStart == null) === (data.callsignRangeEnd == null), {

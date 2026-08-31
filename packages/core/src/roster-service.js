@@ -215,6 +215,12 @@ export async function bindRosterRank(ctx, input) {
   const priorityPatch =
     data.nicknamePriority === undefined ? {} : { nicknamePriority: data.nicknamePriority };
 
+  // Same rule again: only touch the gate role when the caller sent it, so re-binding from
+  // the `/roster bind` command (which knows nothing about gates) does not clear one set
+  // on the dashboard. Explicit null clears it.
+  const gatePatch =
+    data.requiresRoleId === undefined ? {} : { requiresRoleId: data.requiresRoleId ?? null };
+
   const rank = existing
     ? await prisma.rosterRank.update({
         where: { id: existing.id },
@@ -225,6 +231,7 @@ export async function bindRosterRank(ctx, input) {
           deletedAt: null,
           ...rangePatch,
           ...priorityPatch,
+          ...gatePatch,
         },
       })
     : await prisma.rosterRank.create({
@@ -236,6 +243,7 @@ export async function bindRosterRank(ctx, input) {
           position: data.position,
           ...rangePatch,
           ...priorityPatch,
+          ...gatePatch,
         },
       });
 

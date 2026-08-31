@@ -22,7 +22,11 @@ import { buildManagedNickname, inferPreferredName } from './roster-nickname.js';
  * always, so the answer never depends on the order rows came back from the database. A
  * tie is broken by rank id so it is at least stable.
  *
- * @param {Array<{id: string, discordRoleId: string, position: number}>} ranks
+ * A rank may name a second role in `requiresRoleId`: it then only applies to a member
+ * who holds BOTH roles, which is how a compound rank like "Auxiliary Staff" (Server Staff
+ * *and* Department Head) is expressed without a role that means exactly that.
+ *
+ * @param {Array<{id: string, discordRoleId: string, requiresRoleId?: string|null, position: number}>} ranks
  * @param {Iterable<string>} heldRoleIds
  * @returns {object|null} the winning rank, or null when they hold none
  */
@@ -32,6 +36,8 @@ export function resolveRank(ranks, heldRoleIds) {
 
   for (const rank of ranks) {
     if (!held.has(rank.discordRoleId)) continue;
+    // A gated rank only counts when the member also holds its required second role.
+    if (rank.requiresRoleId && !held.has(rank.requiresRoleId)) continue;
     if (
       !winner ||
       rank.position > winner.position ||
@@ -390,6 +396,9 @@ export function presentRoster(roster) {
       shortName: rankShortName(rank),
       position: rank.position,
       discordRoleId: rank.discordRoleId,
+      // The optional second role a member must also hold for this rank, so the dashboard
+      // can show and edit the gate (e.g. Auxiliary Staff = Server Staff + Dept Head).
+      requiresRoleId: rank.requiresRoleId ?? null,
       // The auto-assign block, so the dashboard can show and edit it. Null when unset.
       callsignRangeStart: rank.callsignRangeStart ?? null,
       callsignRangeEnd: rank.callsignRangeEnd ?? null,
