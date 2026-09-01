@@ -399,6 +399,8 @@ export function presentRoster(roster) {
       // The optional second role a member must also hold for this rank, so the dashboard
       // can show and edit the gate (e.g. Auxiliary Staff = Server Staff + Dept Head).
       requiresRoleId: rank.requiresRoleId ?? null,
+      // Whether this rank yields its nickname to the member's other roster in this guild.
+      yieldNickname: Boolean(rank.yieldNickname),
       // The auto-assign block, so the dashboard can show and edit it. Null when unset.
       callsignRangeStart: rank.callsignRangeStart ?? null,
       callsignRangeEnd: rank.callsignRangeEnd ?? null,

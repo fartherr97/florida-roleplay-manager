@@ -162,10 +162,15 @@ async function reconcile({ job, gateway, prisma }) {
   // Which roster owns each member's nickname. Only relevant when a guild has more than
   // one nickname-writing roster, but then it matters a lot: without it two rosters would
   // alternately overwrite the same person on every sync.
+  // Whether the member's rank ON THIS roster yields its nickname to another roster.
+  const selfYield = new Map(
+    changes.filter((c) => c.nickname).map((c) => [c.discordUserId, Boolean(c.rank?.yieldNickname)]),
+  );
   const nicknameOwners = await resolveNicknameOwners({
     prisma,
     roster,
-    discordUserIds: changes.filter((change) => change.nickname).map((c) => c.discordUserId),
+    discordUserIds: [...selfYield.keys()],
+    selfYield,
   });
 
   let applied = 0;
@@ -216,19 +221,25 @@ async function reconcile({ job, gateway, prisma }) {
  * Decides which roster owns each member's nickname.
  *
  * A member can sit on more than one roster in the same guild - the staff team and their
- * department, say - and a nickname has room for exactly one rank. The roster with the
- * lowest `position` wins, with the slug as a stable tie-break, so the answer is the same
- * whichever roster's job happens to run first. Without this the two rosters overwrite
- * each other forever, each one's write looking to the other like drift to correct.
+ * department, say - and a nickname has room for exactly one rank. A rank marked
+ * `yieldNickname` (an Auxiliary Staff rank keeping the member's department name) steps
+ * aside; among the rest the roster with the lowest `position` wins, with the slug as a
+ * stable tie-break, so the answer is the same whichever roster's job happens to run
+ * first. A member every one of whose rosters yields still gets a nickname from the
+ * lowest-position one, so nobody is left unformatted. Without any of this the two rosters
+ * overwrite each other forever, each one's write looking to the other like drift.
  *
+ * @param {Map<string, boolean>} [selfYield] whether the member's rank on the roster being
+ *   reconciled yields; the competing rosters' yield comes from their own rows.
  * @returns {Promise<Map<string, string>>} discord user id -> owning roster id
  */
-async function resolveNicknameOwners({ prisma, roster, discordUserIds }) {
+async function resolveNicknameOwners({ prisma, roster, discordUserIds, selfYield = new Map() }) {
   const owners = new Map();
   if (discordUserIds.length === 0) return owners;
 
-  // Every other nickname-writing roster in this guild that these members are on. The
-  // roster being reconciled is included implicitly: they are on it by definition.
+  // Every other nickname-writing roster in this guild that these members are on, with the
+  // member's rank on it (for its yield flag). The roster being reconciled is included
+  // implicitly: they are on it by definition, and its yield comes from `selfYield`.
   const competing = await prisma.rosterMembership.findMany({
     where: {
       discordUserId: { in: discordUserIds },
@@ -242,23 +253,40 @@ async function resolveNicknameOwners({ prisma, roster, discordUserIds }) {
     },
     select: {
       discordUserId: true,
+      rank: { select: { yieldNickname: true } },
       roster: { select: { id: true, slug: true, position: true } },
     },
   });
 
-  const byMember = new Map(discordUserIds.map((id) => [id, [self(roster)]]));
+  const byMember = new Map(
+    discordUserIds.map((id) => [id, [self(roster, selfYield.get(id) ?? false)]]),
+  );
   for (const row of competing) {
-    byMember.get(row.discordUserId)?.push(row.roster);
+    byMember
+      .get(row.discordUserId)
+      ?.push({ ...row.roster, yields: Boolean(row.rank?.yieldNickname) });
   }
 
   for (const [discordUserId, candidates] of byMember) {
-    candidates.sort((a, b) => a.position - b.position || a.slug.localeCompare(b.slug));
+    // A yielding rank sorts last, so a non-yielding roster owns the nickname; ties fall to
+    // the lowest position, then the slug. Every candidate yielding still leaves an owner.
+    candidates.sort(
+      (a, b) =>
+        Number(a.yields) - Number(b.yields) ||
+        a.position - b.position ||
+        a.slug.localeCompare(b.slug),
+    );
     owners.set(discordUserId, candidates[0].id);
   }
   return owners;
 }
 
-const self = (roster) => ({ id: roster.id, slug: roster.slug, position: roster.position });
+const self = (roster, yields = false) => ({
+  id: roster.id,
+  slug: roster.slug,
+  position: roster.position,
+  yields,
+});
 
 /** The configured maximum-change threshold, falling back to the environment value. */
 async function removalThreshold(prisma) {

@@ -471,6 +471,9 @@ export const bindRosterRankSchema = z
     // mean "holds both roles at once" (e.g. Auxiliary Staff = Server Staff + Dept Head).
     // Explicit null clears the gate; undefined leaves it alone.
     requiresRoleId: snowflake.nullish(),
+    // When true, a member holding this rank keeps the nickname their other roster in this
+    // guild writes (their department one) instead of this roster's. Undefined leaves it.
+    yieldNickname: z.boolean().optional(),
     reason: optionalReason,
   })
   .refine((data) => (data.callsignRangeStart == null) === (data.callsignRangeEnd == null), {

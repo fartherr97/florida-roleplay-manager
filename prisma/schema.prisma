@@ -563,6 +563,12 @@ model RosterRank {
   /// roster's guild name (DEPARTMENT) the one that propagates to the member's
   /// other guilds. NONE leaves them on the default. MAIN outranks DEPARTMENT.
   nicknamePriority NicknamePriority @default(NONE)
+  /// When true, a member holding this rank does NOT take their nickname from this roster:
+  /// another roster they are on in the same guild owns it instead (their department
+  /// roster, say). Lets an Auxiliary Staff rank keep the member's department name and
+  /// format rather than overwriting it with the staff one. If they are on no other
+  /// nickname roster here, this roster still writes, so nobody is left unformatted.
+  yieldNickname Boolean @default(false)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?

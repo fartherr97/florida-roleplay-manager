@@ -221,6 +221,9 @@ export async function bindRosterRank(ctx, input) {
   const gatePatch =
     data.requiresRoleId === undefined ? {} : { requiresRoleId: data.requiresRoleId ?? null };
 
+  const yieldPatch =
+    data.yieldNickname === undefined ? {} : { yieldNickname: Boolean(data.yieldNickname) };
+
   const rank = existing
     ? await prisma.rosterRank.update({
         where: { id: existing.id },
@@ -232,6 +235,7 @@ export async function bindRosterRank(ctx, input) {
           ...rangePatch,
           ...priorityPatch,
           ...gatePatch,
+          ...yieldPatch,
         },
       })
     : await prisma.rosterRank.create({
@@ -244,6 +248,7 @@ export async function bindRosterRank(ctx, input) {
           ...rangePatch,
           ...priorityPatch,
           ...gatePatch,
+          ...yieldPatch,
         },
       });
 
