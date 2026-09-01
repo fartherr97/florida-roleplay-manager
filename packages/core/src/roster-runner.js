@@ -268,15 +268,15 @@ async function resolveNicknameOwners({ prisma, roster, discordUserIds, selfYield
   }
 
   for (const [discordUserId, candidates] of byMember) {
-    // A yielding rank sorts last, so a non-yielding roster owns the nickname; ties fall to
-    // the lowest position, then the slug. Every candidate yielding still leaves an owner.
-    candidates.sort(
-      (a, b) =>
-        Number(a.yields) - Number(b.yields) ||
-        a.position - b.position ||
-        a.slug.localeCompare(b.slug),
-    );
-    owners.set(discordUserId, candidates[0].id);
+    // A yielding rank never owns the nickname: it steps aside so the member keeps their
+    // department identity. Among the non-yielding rosters the lowest position wins, ties
+    // broken by slug. If every roster here yields, no roster writes — the member's
+    // nickname is left to the cross-guild mirror (their department name), or, if they are
+    // on no other roster anywhere, to themselves.
+    const eligible = candidates.filter((candidate) => !candidate.yields);
+    if (eligible.length === 0) continue;
+    eligible.sort((a, b) => a.position - b.position || a.slug.localeCompare(b.slug));
+    owners.set(discordUserId, eligible[0].id);
   }
   return owners;
 }

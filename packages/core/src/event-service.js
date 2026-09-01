@@ -479,6 +479,9 @@ async function propagateMemberName({ prisma, gateway, discordUserId }) {
     where: {
       discordUserId,
       status: RosterMembershipStatus.ACTIVE,
+      // A yielding rank is skipped here too, so its guild falls to the plain-name branch
+      // below and receives the full authority nickname rather than its own format.
+      NOT: { rank: { yieldNickname: true } },
       roster: {
         ...notDeleted,
         nicknameSyncEnabled: true,
@@ -587,12 +590,15 @@ export async function mirrorNameToNonRosterGuilds({ prisma, gateway, discordUser
 
   // Guilds where the member holds a nickname roster keep their own callsign/rank format,
   // maintained by the roster engine — never overwrite those with the raw authority nick.
+  // A membership whose rank yields its nickname does NOT count: that guild is treated as
+  // roster-free so the full department nickname mirrors in (the Auxiliary Staff case).
   const rostered = new Set(
     (
       await prisma.rosterMembership.findMany({
         where: {
           discordUserId,
           status: RosterMembershipStatus.ACTIVE,
+          NOT: { rank: { yieldNickname: true } },
           roster: {
             ...notDeleted,
             nicknameSyncEnabled: true,
