@@ -225,8 +225,11 @@ export const listGrantRulesSchema = z.object({
 export const addGrantRuleSchema = z.object({
   discordGuildId: snowflake,
   grantor: roleRef,
-  // Up to a select menu's worth of roles the grantor role may hand out.
-  grantables: z.array(roleRef).min(1).max(25),
+  // Roles the grantor role may hand out. The website editor can map up to 100;
+  // the Discord `/rolemanager config` command adds them a select menu (25) at a
+  // time, but they accumulate on the same grantor, so the total is not capped at
+  // 25 either way.
+  grantables: z.array(roleRef).min(1).max(100),
   reason: optionalReason,
 });
 
@@ -234,7 +237,7 @@ export const removeGrantRuleSchema = z.object({
   discordGuildId: snowflake,
   grantorRoleId: snowflake,
   // Omit to remove every grantable role for this grantor.
-  grantableRoleIds: z.array(snowflake).max(25).optional(),
+  grantableRoleIds: z.array(snowflake).max(100).optional(),
   reason: optionalReason,
 });
 
