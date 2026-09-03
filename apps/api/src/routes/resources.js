@@ -40,6 +40,9 @@ import {
   testLogWebhook,
   listGuildDiscordRoles,
   listGuilds,
+  listGrantRules,
+  addGrantRule,
+  removeGrantRule,
   listManagedRoles,
   listMappings,
   listMembers,
@@ -330,6 +333,17 @@ export default async function resourceRoutes(fastify) {
       assignmentId: request.params.assignmentId,
     }),
   );
+
+  // --- self-service role delegation (/rolemanager) -------------------------
+
+  // The grantor -> grantable mappings behind `/rolemanager`, per guild. Reading is
+  // open to any authenticated staff (the core service asks for no capability, the
+  // same as `/rolemanager view`); adding and removing require `rolegrant.manage`,
+  // enforced inside the core service. `discordGuildId` is the snowflake, matching
+  // the service inputs.
+  route(fastify, 'get', '/role-grants', (request) => listGrantRules(request.ctx, request.query));
+  route(fastify, 'post', '/role-grants', (request) => addGrantRule(request.ctx, request.body));
+  route(fastify, 'delete', '/role-grants', (request) => removeGrantRule(request.ctx, request.body));
 
   // --- system --------------------------------------------------------------
 
