@@ -70,6 +70,24 @@ function snowflakeList() {
   );
 }
 
+/**
+ * Comma-separated `guildId:roleId` pairs, parsed to a { [guildId]: roleId } map.
+ * Used to hand out a per-guild role automatically — e.g. a visitor pass a member
+ * gets the moment they join that department's server.
+ */
+function guildRolePairMap(defaultValue = '') {
+  return z.preprocess((value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    const raw = typeof value === 'string' && value.length > 0 ? value : defaultValue;
+    const map = {};
+    for (const pair of raw.split(',').map((entry) => entry.trim()).filter(Boolean)) {
+      const [guild, role] = pair.split(':').map((part) => part.trim());
+      if (SNOWFLAKE.test(guild) && SNOWFLAKE.test(role)) map[guild] = role;
+    }
+    return map;
+  }, z.record(z.string(), z.string().regex(SNOWFLAKE)));
+}
+
 /** Comma separated list of origins. */
 function stringList() {
   return z.preprocess(
@@ -143,6 +161,17 @@ const envSchema = z
     // The staff role pinged above each new application in the review channel. Defaulted to
     // the Server Staff Team role; set to empty to post the applications with no ping.
     WHITELIST_REVIEW_PING_ROLE_ID: z.string().regex(SNOWFLAKE).or(z.literal('')).default('1534380749304889384'),
+
+    // Per-department "visitor pass" roles handed out automatically the moment a
+    // member joins that server (after membership screening, if the server uses
+    // it). Comma-separated `guildId:roleId` pairs. Defaulted to FHP, BCSO and MPD
+    // so it works out of the box; the bot needs Manage Roles and its highest role
+    // above each visitor role. Set to a single space to turn the feature off.
+    VISITOR_PASS_ROLES: guildRolePairMap(
+      '1534486963065978990:1542772584863498353,' +
+        '1534487473206595718:1543462393341022258,' +
+        '1534487217299525634:1543464138905223198',
+    ),
 
     // The community website, which owns disciplinary records. `/bgcheck` calls it
     // to read a member's folded record and post the embed it builds. The token is

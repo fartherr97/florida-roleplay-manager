@@ -118,6 +118,15 @@ export function registerEventHandlers(client, { gateway, env }) {
         });
       }
 
+      // A member who just passed membership screening (pending → not pending) is
+      // now a full member, so hand out their department's visitor pass here — the
+      // join handler deliberately skipped them while they were still pending.
+      if (oldMember.pending && !newMember.pending) {
+        await assignVisitorRole(newMember, env).catch((error) => {
+          log.error({ err: serializeError(error) }, 'visitor pass on screening pass failed');
+        });
+      }
+
       // Any visible change — roles or nickname — nudges the community website so
       // its roster follows instantly rather than on the next interval sync.
       if (
@@ -162,6 +171,10 @@ export function registerEventHandlers(client, { gateway, env }) {
     try {
       notifySiteMemberChange(member.id);
       await handleMemberJoin({ discordGuildId: member.guild.id, discordUserId: member.id });
+      // Hand out the department's visitor pass — but not to a member still stuck
+      // behind membership screening; those get it when they pass, on the update
+      // below.
+      if (!member.pending) await assignVisitorRole(member, env);
     } catch (error) {
       log.error({ err: serializeError(error) }, 'guildMemberAdd failed');
     }
@@ -225,6 +238,31 @@ export function registerEventHandlers(client, { gateway, env }) {
   client.on(Events.Error, (error) => {
     log.error({ err: serializeError(error) }, 'discord client error');
   });
+}
+
+/**
+ * Give a member their department's configured "visitor pass" role, if any.
+ *
+ * Never given to bots, and skipped when the member already holds it. Needs the
+ * bot to have Manage Roles and a role above the visitor role; a failure is
+ * logged and swallowed so it never disrupts the rest of the join handling.
+ */
+async function assignVisitorRole(member, env) {
+  if (member.user?.bot) return;
+  const roleId = env.VISITOR_PASS_ROLES?.[member.guild.id];
+  if (!roleId || member.roles.cache.has(roleId)) return;
+  try {
+    await member.roles.add(roleId, 'FLRP visitor pass on join');
+    log.info(
+      { discordGuildId: member.guild.id, discordUserId: member.id, roleId },
+      'assigned visitor pass',
+    );
+  } catch (error) {
+    log.warn(
+      { err: serializeError(error), discordGuildId: member.guild.id, roleId },
+      'could not assign visitor pass (check Manage Roles and role position)',
+    );
+  }
 }
 
 /**
