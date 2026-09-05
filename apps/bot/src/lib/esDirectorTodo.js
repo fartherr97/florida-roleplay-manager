@@ -26,8 +26,12 @@ export const ES_TODO_FOOTER = 'ES Director To-Do';
 /** The embed field that carries the submitter's mention, so they can be DMed the outcome. */
 export const REQUESTED_FIELD = 'Requested by';
 
-/** The seat the list belongs to — pinged above every post. */
+/** The seat the list belongs to. */
 export const ES_DIRECTOR_ROLE_ID = '1535994241392582706';
+export const ASST_ES_DIRECTOR_ROLE_ID = '1542221112442618027';
+
+/** Roles pinged above every post — the ES Director and their assistant. */
+export const ES_PING_ROLE_IDS = [ES_DIRECTOR_ROLE_ID, ASST_ES_DIRECTOR_ROLE_ID];
 
 /**
  * Who may add an item: FLRP Department Heads, the ES Director seat and Ownership.
@@ -37,7 +41,7 @@ export const DEFAULT_ES_ALLOWED_ROLE_IDS = [
   '1534380747689824276', // Owner
   '1534911243142303744', // Co-Owner
   ES_DIRECTOR_ROLE_ID, // ES Director
-  '1542221112442618027', // Asst. ES Director
+  ASST_ES_DIRECTOR_ROLE_ID, // Asst. ES Director
   '1534380750173110282', // Department Head
 ];
 
@@ -47,7 +51,7 @@ export const DEFAULT_ES_ALLOWED_ROLE_IDS = [
  */
 export const ES_RESOLVER_ROLE_IDS = [
   ES_DIRECTOR_ROLE_ID,
-  '1542221112442618027', // Asst. ES Director
+  ASST_ES_DIRECTOR_ROLE_ID, // Asst. ES Director
   '1534380747689824276', // Owner
   '1534911243142303744', // Co-Owner
 ];

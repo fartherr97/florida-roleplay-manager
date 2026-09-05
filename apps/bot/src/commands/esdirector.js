@@ -2,8 +2,8 @@
  * `/esdirector` — add an item to the ES Director's to-do list.
  *
  * The ES Director's twin of `/mike`. It takes a to-do description and a priority, then posts
- * an embed to a dedicated to-do channel via a webhook, pinging the ES Director role above it
- * so it reaches whoever holds the seat. It authorizes its caller itself (Department Heads,
+ * an embed to a dedicated to-do channel via a webhook, pinging the ES Director and Asst. ES
+ * Director roles above it so it reaches whoever holds the seat. It authorizes its caller itself (Department Heads,
  * the ES Director seat and Ownership), so it runs without a linked bot actor — the guild
  * allowlist and rate limit still apply.
  *
@@ -21,7 +21,7 @@ import { COLORS, errorEmbed, successEmbed, truncate } from '../lib/ui.js';
 import {
   DENY_EMOJI,
   DONE_EMOJI,
-  ES_DIRECTOR_ROLE_ID,
+  ES_PING_ROLE_IDS,
   ES_TODO_FOOTER,
   ES_TODO_TITLE,
   REQUESTED_FIELD,
@@ -110,9 +110,9 @@ export async function execute(interaction) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         // The ping sits above the embed and must actually notify the seat, so allow just
-        // this one role mention.
-        content: `<@&${ES_DIRECTOR_ROLE_ID}>`,
-        allowed_mentions: { roles: [ES_DIRECTOR_ROLE_ID] },
+        // these role mentions (the ES Director and their assistant).
+        content: ES_PING_ROLE_IDS.map((id) => `<@&${id}>`).join(' '),
+        allowed_mentions: { roles: ES_PING_ROLE_IDS },
         embeds: [
           {
             title: ES_TODO_TITLE,
