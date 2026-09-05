@@ -131,6 +131,12 @@ const envSchema = z
     // Role ids allowed to run `/mike` (Community Director and up). Optional: when empty the
     // command falls back to its built-in ownership + director role list.
     MIKE_ALLOWED_ROLE_IDS: snowflakeList(),
+    // The ES Director's twin of `/mike`. Discord webhook `/esdirector` posts to-do items
+    // to; the command reports it is unavailable until set.
+    ESDIRECTOR_TODO_WEBHOOK_URL: z.string().min(1).optional(),
+    // Role ids allowed to run `/esdirector` (Department Heads, the ES Director seat and
+    // Ownership). Optional: when empty the command falls back to its built-in list.
+    ESDIRECTOR_ALLOWED_ROLE_IDS: snowflakeList(),
 
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: integerish(4000, { min: 1, max: 65535 }),

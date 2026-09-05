@@ -8,6 +8,7 @@ import * as access from './access.js';
 import * as audit from './audit.js';
 import * as bgcheck from './bgcheck.js';
 import * as email from './email.js';
+import * as esdirector from './esdirector.js';
 import * as globalban from './globalban.js';
 import * as globalnickname from './globalnickname.js';
 import * as globalunban from './globalunban.js';
@@ -29,6 +30,7 @@ const MODULES = [
   audit,
   bgcheck,
   email,
+  esdirector,
   globalban,
   globalnickname,
   globalunban,

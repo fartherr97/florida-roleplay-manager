@@ -22,6 +22,8 @@ export const REDACTED_PATHS = Object.freeze([
   'DATABASE_URL',
   'REDIS_URL',
   'ADMIN_ALERT_WEBHOOK_URL',
+  'MIKE_TODO_WEBHOOK_URL',
+  'ESDIRECTOR_TODO_WEBHOOK_URL',
   'password',
   'secret',
   'authorization',

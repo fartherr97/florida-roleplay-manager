@@ -22,6 +22,7 @@ import {
 import { handleInteraction } from './interactions.js';
 import { registerGuildCommands } from './lib/register.js';
 import { handleMikeReaction } from './lib/mikeTodo.js';
+import { handleEsDirectorReaction } from './lib/esDirectorTodo.js';
 import { notifySiteMemberChange } from './lib/siteNotify.js';
 
 const log = createLogger('bot.events');
@@ -227,11 +228,16 @@ export function registerEventHandlers(client, { gateway, env }) {
 
   // --- /mike to-do reactions -----------------------------------------------
 
-  // Mike reacting ✅/❌ on a to-do embed resolves it: DM him and delete the post.
-  // The handler filters to his reactions on our own embeds before touching anything.
+  // A ✅/❌ reaction on a to-do embed resolves it: DM the submitter and delete the post.
+  // Each handler filters to its own embed fingerprint and its own resolver (Mike for
+  // `/mike`, the ES Director seat for `/esdirector`) before touching anything, so the two
+  // lists never react to each other's posts.
   client.on(Events.MessageReactionAdd, (reaction, user) => {
     handleMikeReaction(reaction, user, { log }).catch((error) => {
       log.error({ err: serializeError(error) }, 'mike reaction handler error');
+    });
+    handleEsDirectorReaction(reaction, user, { log }).catch((error) => {
+      log.error({ err: serializeError(error) }, 'es director reaction handler error');
     });
   });
 
