@@ -10,6 +10,7 @@ import { banGlobally, formatSonoranResults } from '@frm/core';
 import { parseDuration } from '@frm/shared';
 import { successEmbed, truncate } from '../lib/ui.js';
 import { memberOption } from '../lib/options.js';
+import { reportBan } from '../lib/siteBans.js';
 
 export const data = new SlashCommandBuilder()
   .setName('globalban')
@@ -56,6 +57,23 @@ export async function execute(interaction, { ctx, gateway }) {
     durationMs,
     gateway,
   });
+
+  // Mirror the ban onto the community website's active ban list (best-effort;
+  // the guild display name is looked up for the list, the id is the key).
+  const displayName = await interaction.guild?.members
+    .fetch(targetId)
+    .then((member) => member.displayName)
+    .catch(() => user?.globalName ?? user?.username ?? null);
+  reportBan({
+    discordId: targetId,
+    displayName,
+    reason: interaction.options.getString('reason') ?? null,
+    actorId: interaction.user.id,
+    actorName: interaction.member?.displayName ?? interaction.user.username,
+    serversApplied: result.applied,
+    serversTotal: result.total,
+    expiresAt: result.expiresAt ?? null,
+  }).catch(() => {});
 
   const lines = result.results.map((entry) => {
     if (entry.status === 'applied') return `Banned — ${entry.guild}`;

@@ -8,6 +8,7 @@ import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { formatSonoranResults, unbanGlobally } from '@frm/core';
 import { successEmbed, truncate } from '../lib/ui.js';
 import { memberOption } from '../lib/options.js';
+import { reportUnban } from '../lib/siteBans.js';
 
 export const data = new SlashCommandBuilder()
   .setName('globalunban')
@@ -35,6 +36,13 @@ export async function execute(interaction, { ctx, gateway }) {
     reason: interaction.options.getString('reason') ?? undefined,
     gateway,
   });
+
+  // Clear the user from the website's active ban list (best-effort).
+  reportUnban({
+    discordId: targetId,
+    actorId: interaction.user.id,
+    actorName: interaction.member?.displayName ?? interaction.user.username,
+  }).catch(() => {});
 
   const lines = result.results.map((entry) => {
     if (entry.status === 'applied') return `Unbanned — ${entry.guild}`;
