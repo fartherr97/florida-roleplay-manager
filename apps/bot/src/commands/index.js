@@ -10,6 +10,7 @@ import * as bgcheck from './bgcheck.js';
 import * as email from './email.js';
 import * as esdirector from './esdirector.js';
 import * as globalban from './globalban.js';
+import * as globalbansync from './globalbansync.js';
 import * as globalnickname from './globalnickname.js';
 import * as globalunban from './globalunban.js';
 import * as guild from './guild.js';
@@ -32,6 +33,7 @@ const MODULES = [
   email,
   esdirector,
   globalban,
+  globalbansync,
   globalnickname,
   globalunban,
   guild,

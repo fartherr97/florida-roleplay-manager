@@ -278,6 +278,13 @@ export class MockRoleGateway {
     return { applied: true };
   }
 
+  async listBans(discordGuildId) {
+    const prefix = `${discordGuildId}:`;
+    return [...(this.bans ?? [])]
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => ({ userId: key.slice(prefix.length), username: null, globalName: null, reason: null }));
+  }
+
   async leaveGuild(discordGuildId) {
     this.leftGuilds.push(discordGuildId);
     this.guilds.delete(discordGuildId);

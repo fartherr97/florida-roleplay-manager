@@ -312,6 +312,39 @@ export class DiscordJsRoleGateway {
   }
 
   /**
+   * Every ban in a guild, in an abstract shape. Used by the global-ban sync to
+   * reconcile Discord's live ban lists onto the website. Paginates through the
+   * full list (Discord returns up to 1000 per page).
+   *
+   * @param {string} discordGuildId
+   * @returns {Promise<Array<{userId: string, username: string|null, globalName: string|null, reason: string|null}>>}
+   */
+  async listBans(discordGuildId) {
+    const guild = await this.#requireGuild(discordGuildId);
+    const out = [];
+    let after;
+    // Page until a short page comes back — Discord caps a page at 1000.
+    for (;;) {
+      const page = await guild.bans.fetch({ limit: 1000, after }).catch((error) => {
+        log.warn({ discordGuildId, err: serializeError(error) }, 'list bans failed');
+        return null;
+      });
+      if (!page || page.size === 0) break;
+      for (const ban of page.values()) {
+        out.push({
+          userId: ban.user?.id ?? String(ban.user),
+          username: ban.user?.username ?? null,
+          globalName: ban.user?.globalName ?? null,
+          reason: ban.reason ?? null,
+        });
+      }
+      if (page.size < 1000) break;
+      after = page.lastKey();
+    }
+    return out;
+  }
+
+  /**
    * Every category and channel in a guild, in the gateway's abstract shape.
    * Used by server provisioning to decide what already exists and must be skipped.
    *

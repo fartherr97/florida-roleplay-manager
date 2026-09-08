@@ -309,3 +309,76 @@ export async function runTimedBanExpiry({ gateway, prisma }) {
   log.info({ expired: due.length }, 'timed bans swept');
   return { expired: due.length };
 }
+
+/**
+ * Collect every current Discord ban across all registered guilds, de-duplicated
+ * by user id. A backfill/reconcile source for the website's ban list: banning
+ * predates the site sync, so this reads the live truth from Discord and hands
+ * back a clean set the caller reports onward. Read-only in Discord — it changes
+ * no bans, only gathers them. Gated at system.manage like the rest of this file.
+ *
+ * @returns {Promise<{total:number, guildsRead:number, guildsFailed:number,
+ *   bans: Array<{discordUserId:string, displayName:string|null, reason:string|null,
+ *   guildCount:number, expiresAt:Date|null}>}>}
+ */
+export async function syncGlobalBans(ctx, { gateway }) {
+  authorize(ctx.actor, { capability: 'system.manage', scope: {} });
+
+  const guilds = await approvedGuilds(ctx.prisma);
+  const byUser = new Map(); // id -> { displayName, reason, guildCount }
+  let guildsRead = 0;
+  let guildsFailed = 0;
+
+  for (const guild of guilds) {
+    let list;
+    try {
+      list = await gateway.listBans(guild.discordGuildId);
+      guildsRead += 1;
+    } catch (error) {
+      guildsFailed += 1;
+      log.warn(
+        { err: serializeError(error), discordGuildId: guild.discordGuildId },
+        'global ban sync: could not read a guild ban list',
+      );
+      continue;
+    }
+    for (const ban of list ?? []) {
+      const id = String(ban.userId ?? '').trim();
+      if (!SNOWFLAKE.test(id)) continue;
+      const existing = byUser.get(id);
+      const name = ban.globalName || ban.username || null;
+      if (existing) {
+        existing.guildCount += 1;
+        if (!existing.displayName && name) existing.displayName = name;
+        if (!existing.reason && ban.reason) existing.reason = ban.reason;
+      } else {
+        byUser.set(id, { displayName: name, reason: ban.reason ?? null, guildCount: 1 });
+      }
+    }
+  }
+
+  // Attach the expiry of any active timed ban, so a synced temp ban still shows
+  // its countdown on the site rather than reading as permanent.
+  const timed = await ctx.prisma.timedBan
+    .findMany({ where: { active: true }, select: { discordUserId: true, expiresAt: true } })
+    .catch(() => []);
+  const expiryByUser = new Map(timed.map((t) => [t.discordUserId, t.expiresAt]));
+
+  const bans = [...byUser.entries()].map(([discordUserId, info]) => ({
+    discordUserId,
+    displayName: info.displayName,
+    reason: info.reason,
+    guildCount: info.guildCount,
+    expiresAt: expiryByUser.get(discordUserId) ?? null,
+  }));
+
+  await recordAudit(ctx.prisma, {
+    ctx,
+    action: AuditAction.MEMBER_GLOBAL_BANNED,
+    targetDiscordId: null,
+    newState: { sync: true, total: bans.length, guildsRead, guildsFailed },
+    reason: 'Global ban list synced to the website',
+  }).catch(() => {});
+
+  return { total: bans.length, guildsRead, guildsFailed, guildsTotal: guilds.length, bans };
+}
