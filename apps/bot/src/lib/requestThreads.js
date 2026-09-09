@@ -13,6 +13,7 @@
  */
 import { MessageFlags, ThreadAutoArchiveDuration } from 'discord.js';
 import { getEnv } from '@frm/shared';
+import { getRequestSettings } from '@frm/core';
 import { createLogger, serializeError } from '@frm/logging';
 import { COLORS, errorEmbed, successEmbed, truncate } from './ui.js';
 
@@ -42,12 +43,25 @@ export const TIMEZONES = [
   'EST', 'CST', 'MST', 'PST', 'AKST', 'HST', 'AST', 'GMT/UTC', 'BST', 'CET', 'IST', 'AEST',
 ];
 
-/** The guild's channel + ping roles for a request kind, from the per-guild env maps. */
-export function guildConfig(env, kind, guildId) {
+/**
+ * The guild's channel + ping roles for a request kind.
+ *
+ * The database row (set by Ownership with `/requestconfig`) wins; the per-guild env maps are
+ * the fallback for a guild with no row. A database hiccup degrades to the env maps too, so a
+ * request never fails just because the settings lookup did.
+ */
+export async function guildConfig(env, kind, guildId) {
   const k = KINDS[kind];
+  try {
+    const saved = await getRequestSettings(guildId, kind);
+    if (saved) return { channelId: saved.channelId, roleIds: saved.pingRoleIds, source: 'db' };
+  } catch (error) {
+    log.warn({ err: serializeError(error), guildId, kind }, 'request settings lookup failed; using env');
+  }
   return {
     channelId: env[k.channelsVar]?.[guildId] ?? null,
     roleIds: env[k.rolesVar]?.[guildId] ?? [],
+    source: 'env',
   };
 }
 
@@ -69,14 +83,14 @@ export async function runRequest(interaction, kind) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const env = getEnv();
   const k = KINDS[kind];
-  const { channelId, roleIds } = guildConfig(env, kind, interaction.guildId);
+  const { channelId, roleIds } = await guildConfig(env, kind, interaction.guildId);
 
   if (!channelId) {
     return interaction.editReply({
       embeds: [
         errorEmbed(
           `${k.title}s are not set up here`,
-          `This server has no ${k.noun} request channel configured yet. An admin adds it to \`${k.channelsVar}\`.`,
+          `This server has no ${k.noun} request channel configured yet. Ownership sets it with \`/requestconfig set\`.`,
         ),
       ],
     });

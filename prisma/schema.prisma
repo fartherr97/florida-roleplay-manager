@@ -307,6 +307,30 @@ model ApprovedGuild {
   @@map("approved_guilds")
 }
 
+enum RequestKind {
+  TRAINING
+  INTERVIEW
+}
+
+/// Where `/requesttraining` / `/requestinterview` post in a guild and which roles they ping
+/// inside the thread. Set by Ownership with `/requestconfig`; keyed by raw guild id so it
+/// works in any guild the bot is in, with the env maps as the fallback when no row exists.
+model GuildRequestSettings {
+  id             String      @id @default(uuid()) @db.Uuid
+  discordGuildId String
+  kind           RequestKind
+  channelId      String
+  /// Discord role ids pinged inside the thread on open (their members get added).
+  pingRoleIds    String[]    @default([])
+  /// Discord user id of whoever last set it.
+  updatedBy      String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@unique([discordGuildId, kind])
+  @@map("guild_request_settings")
+}
+
 // ---------------------------------------------------------------------------
 // Managed roles and mappings
 // ---------------------------------------------------------------------------

@@ -181,6 +181,9 @@ const envSchema = z
     TRAINING_PING_ROLES: guildRoleListMap(),
     INTERVIEW_REQUEST_CHANNELS: guildRolePairMap(''),
     INTERVIEW_PING_ROLES: guildRoleListMap(),
+    // Role ids allowed to run `/requestconfig` (per-guild request setup). Optional:
+    // defaults to the Owner + Co-Owner roles.
+    REQUEST_CONFIG_ROLE_IDS: snowflakeList(),
 
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: integerish(4000, { min: 1, max: 65535 }),
