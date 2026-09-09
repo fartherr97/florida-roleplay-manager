@@ -100,9 +100,27 @@ export async function execute(interaction) {
   }
 
   if (isPublic) {
-    // Post the record into the channel, and quietly confirm to the caller.
-    await interaction.followUp(payload);
-    return interaction.editReply({ content: 'Background check posted in the channel. ✅' });
+    // The command was deferred ephemerally (so a denial or error stays private),
+    // and a follow-up to an ephemeral reply is itself ephemeral — so post the
+    // record straight into the channel, then confirm privately to the caller.
+    const channel =
+      interaction.channel ??
+      (await interaction.client.channels.fetch(interaction.channelId).catch(() => null));
+    if (channel?.isTextBased?.()) {
+      try {
+        await channel.send(payload);
+        return interaction.editReply({ content: 'Background check posted in the channel. ✅' });
+      } catch (error) {
+        log.warn({ err: serializeError(error) }, 'bgcheck public post failed');
+        // Fall through to show the caller the record privately rather than lose it.
+        return interaction.editReply({
+          content: "I couldn't post it in the channel (check my Send Messages permission here) — here it is for you:",
+          ...payload,
+        });
+      }
+    }
+    // No usable channel — hand it back privately rather than drop it.
+    return interaction.editReply(payload);
   }
 
   return interaction.editReply(payload);
