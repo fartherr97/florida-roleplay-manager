@@ -43,7 +43,10 @@ async function main() {
     'global admins reconciled',
   );
 
-  const { gateway, client } = await createGatewayFromEnv({ cacheMembers: true });
+  const { gateway, client } = await createGatewayFromEnv({
+    cacheMembers: true,
+    chatBridge: Boolean(env.CHAT_BRIDGE_CHANNEL_ID),
+  });
   registerEventHandlers(client, { gateway, env });
 
   // Register slash commands on boot so a fresh deployment is usable without a separate

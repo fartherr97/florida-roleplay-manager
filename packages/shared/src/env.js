@@ -171,6 +171,12 @@ const envSchema = z
     FIVEM_API_SECRET: z.string().min(1).optional(),
     // Role ids allowed to run `/kick`. Optional: defaults to the Server Staff Team role.
     KICK_ALLOWED_ROLE_IDS: snowflakeList(),
+    // Two-way chat bridge: messages typed in this channel are relayed into the game
+    // chatbox as "[Discord] Name: text" (via flrp_api). Unset = bridge off. Requires the
+    // Message Content intent to be enabled for the bot in the Discord developer portal.
+    CHAT_BRIDGE_CHANNEL_ID: z.string().regex(SNOWFLAKE).optional(),
+    // Optional: only members holding one of these roles are relayed (empty = everyone).
+    CHAT_BRIDGE_ROLE_IDS: snowflakeList(),
 
     // Training / interview requests (`/requesttraining`, `/requestinterview`), per guild.
     // Each command may only run in its guild's channel; it posts an embed there, opens a

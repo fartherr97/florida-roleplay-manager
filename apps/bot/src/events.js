@@ -24,6 +24,7 @@ import { registerGuildCommands } from './lib/register.js';
 import { handleMikeReaction } from './lib/mikeTodo.js';
 import { handleEsDirectorReaction } from './lib/esDirectorTodo.js';
 import { notifySiteMemberChange } from './lib/siteNotify.js';
+import { registerChatBridge } from './lib/chatBridge.js';
 
 const log = createLogger('bot.events');
 
@@ -32,6 +33,9 @@ const log = createLogger('bot.events');
  * @param {{gateway: object, env: object}} deps
  */
 export function registerEventHandlers(client, { gateway, env }) {
+  // Discord -> game chat relay (only active when CHAT_BRIDGE_CHANNEL_ID is set).
+  registerChatBridge(client, { env });
+
   client.on(Events.InteractionCreate, (interaction) => {
     handleInteraction(interaction, { gateway }).catch((error) => {
       log.error({ err: serializeError(error) }, 'unhandled interaction error');

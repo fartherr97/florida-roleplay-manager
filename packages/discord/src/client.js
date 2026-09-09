@@ -22,11 +22,14 @@ export const REQUIRED_INTENTS = [
 /**
  * @param {object} [options]
  * @param {boolean} [options.cacheMembers] the worker does not need a member cache
+ * @param {import('discord.js').GatewayIntentBits[]} [options.extraIntents] opt-in intents
+ *   (e.g. GuildMessages + MessageContent for the chat bridge; MessageContent is privileged
+ *   and must be enabled in the developer portal before it is requested)
  * @returns {import('discord.js').Client}
  */
-export function createDiscordClient({ cacheMembers = true } = {}) {
+export function createDiscordClient({ cacheMembers = true, extraIntents = [] } = {}) {
   const client = new Client({
-    intents: REQUIRED_INTENTS,
+    intents: [...REQUIRED_INTENTS, ...extraIntents],
     // Message/Reaction/User partials so a reaction on an uncached message — a
     // webhook-posted `/mike` to-do, or any message from before a restart — still
     // fires messageReactionAdd instead of being silently dropped.
