@@ -8,10 +8,11 @@
  * Run it inside the guild being configured. `set` stores which channel `/requesttraining` or
  * `/requestinterview` posts in and which roles are pinged inside the thread they open (their
  * members get added). No restart, no `.env`: the request commands read this on every use.
- * Ownership only (REQUEST_CONFIG_ROLE_IDS, default the Owner + Co-Owner roles); authorized by
+ * Ownership (REQUEST_CONFIG_ROLE_IDS, default the Owner + Co-Owner roles), FLRP global admins,
+ * the guild owner, or Administrator-permission members; authorized by
  * the command itself, so it runs without a linked bot actor.
  */
-import { ChannelType, MessageFlags, SlashCommandBuilder } from 'discord.js';
+import { ChannelType, MessageFlags, SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { getEnv } from '@frm/shared';
 import { clearRequestSettings, listRequestSettings, setRequestSettings } from '@frm/core';
 import { createLogger, serializeError } from '@frm/logging';
@@ -29,6 +30,21 @@ const DEFAULT_OWNERSHIP_ROLE_IDS = [
   '1534380747689824276', // Owner
   '1534911243142303744', // Co-Owner
 ];
+
+/**
+ * Who may run /requestconfig in a given guild. The Ownership role ids only exist in the
+ * main guild, so department guilds also accept: FLRP global admins (by user id), the
+ * guild's own owner, and anyone holding the Administrator permission there.
+ */
+function canConfigure(interaction, env) {
+  const userId = interaction.user.id;
+  if (env.GLOBAL_ADMIN_DISCORD_IDS?.includes(userId)) return true;
+  if (interaction.guild?.ownerId === userId) return true;
+  if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return true;
+  const allowed = env.REQUEST_CONFIG_ROLE_IDS?.length ? env.REQUEST_CONFIG_ROLE_IDS : DEFAULT_OWNERSHIP_ROLE_IDS;
+  const held = new Set(memberRoleIds(interaction));
+  return allowed.some((id) => held.has(id));
+}
 
 const kindOption = (option) =>
   option
@@ -72,11 +88,14 @@ export async function execute(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const env = getEnv();
 
-  const allowed = env.REQUEST_CONFIG_ROLE_IDS?.length ? env.REQUEST_CONFIG_ROLE_IDS : DEFAULT_OWNERSHIP_ROLE_IDS;
-  const held = new Set(memberRoleIds(interaction));
-  if (!allowed.some((id) => held.has(id))) {
+  if (!canConfigure(interaction, env)) {
     return interaction.editReply({
-      embeds: [errorEmbed('Ownership only', 'Only Ownership can configure the request commands.')],
+      embeds: [
+        errorEmbed(
+          'Not allowed here',
+          'Only FLRP Ownership, this server\'s owner, or a member with the Administrator permission can configure the request commands.',
+        ),
+      ],
     });
   }
 
