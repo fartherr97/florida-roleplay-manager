@@ -88,6 +88,24 @@ function guildRolePairMap(defaultValue = '') {
   }, z.record(z.string(), z.string().regex(SNOWFLAKE)));
 }
 
+/**
+ * Comma-separated `guildId:roleId+roleId` entries, parsed to a { [guildId]: roleId[] } map.
+ * Used where a guild needs SEVERAL roles pinged (e.g. FTO + Academy Instructor).
+ */
+function guildRoleListMap() {
+  return z.preprocess((value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    const map = {};
+    if (typeof value !== 'string') return map;
+    for (const entry of value.split(',').map((e) => e.trim()).filter(Boolean)) {
+      const [guild, roles = ''] = entry.split(':').map((part) => part.trim());
+      const ids = roles.split('+').map((r) => r.trim()).filter((r) => SNOWFLAKE.test(r));
+      if (SNOWFLAKE.test(guild) && ids.length > 0) map[guild] = ids;
+    }
+    return map;
+  }, z.record(z.string(), z.array(z.string().regex(SNOWFLAKE))));
+}
+
 /** Comma separated list of origins. */
 function stringList() {
   return z.preprocess(
@@ -153,6 +171,16 @@ const envSchema = z
     FIVEM_API_SECRET: z.string().min(1).optional(),
     // Role ids allowed to run `/kick`. Optional: defaults to the Server Staff Team role.
     KICK_ALLOWED_ROLE_IDS: snowflakeList(),
+
+    // Training / interview requests (`/requesttraining`, `/requestinterview`), per guild.
+    // Each command may only run in its guild's channel; it posts an embed there, opens a
+    // week-long thread off it, and pings the guild's roles INSIDE the thread so they are
+    // added. Channels are `guildId:channelId,...`; roles are `guildId:roleA+roleB,...`.
+    // A guild with no channel entry has the command report it is not set up there.
+    TRAINING_REQUEST_CHANNELS: guildRolePairMap(''),
+    TRAINING_PING_ROLES: guildRoleListMap(),
+    INTERVIEW_REQUEST_CHANNELS: guildRolePairMap(''),
+    INTERVIEW_PING_ROLES: guildRoleListMap(),
 
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: integerish(4000, { min: 1, max: 65535 }),

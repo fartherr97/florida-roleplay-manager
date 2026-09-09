@@ -20,6 +20,8 @@ import * as member from './member.js';
 import * as mike from './mike.js';
 import * as permissions from './permissions.js';
 import * as request from './request.js';
+import * as requestinterview from './requestinterview.js';
+import * as requesttraining from './requesttraining.js';
 import * as resync from './resync.js';
 import * as role from './role.js';
 import * as roster from './roster.js';
@@ -45,6 +47,8 @@ const MODULES = [
   mike,
   permissions,
   request,
+  requestinterview,
+  requesttraining,
   resync,
   role,
   rolemanager,
