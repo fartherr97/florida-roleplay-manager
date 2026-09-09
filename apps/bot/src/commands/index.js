@@ -14,10 +14,12 @@ import * as globalbansync from './globalbansync.js';
 import * as globalnickname from './globalnickname.js';
 import * as globalunban from './globalunban.js';
 import * as guild from './guild.js';
+import * as kick from './kick.js';
 import * as mapping from './mapping.js';
 import * as member from './member.js';
 import * as mike from './mike.js';
 import * as permissions from './permissions.js';
+import * as request from './request.js';
 import * as resync from './resync.js';
 import * as role from './role.js';
 import * as roster from './roster.js';
@@ -37,10 +39,12 @@ const MODULES = [
   globalnickname,
   globalunban,
   guild,
+  kick,
   mapping,
   member,
   mike,
   permissions,
+  request,
   resync,
   role,
   rolemanager,

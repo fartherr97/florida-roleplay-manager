@@ -138,6 +138,22 @@ const envSchema = z
     // Ownership). Optional: when empty the command falls back to its built-in list.
     ESDIRECTOR_ALLOWED_ROLE_IDS: snowflakeList(),
 
+    // Staff requests (`/request ban`, `/request da`). Posted into this channel with the
+    // Support Team role pinged above the embed. The channel is required for the commands
+    // to work; the ping role is optional (empty = post with no ping). Who may file
+    // defaults to the Server Staff Team role.
+    REQUEST_CHANNEL_ID: z.string().regex(SNOWFLAKE).optional(),
+    REQUEST_PING_ROLE_ID: z.string().regex(SNOWFLAKE).or(z.literal('')).default(''),
+    REQUEST_ALLOWED_ROLE_IDS: snowflakeList(),
+
+    // The FiveM game server's HTTP API (flrp_api). `/kick` calls its bypass-kick endpoint
+    // with the shared secret. Both optional: the command reports it is unavailable until
+    // they are set. The secret is the SAME value as flrp_api_shared_secret in secrets.cfg.
+    FIVEM_API_URL: z.string().min(1).optional(),
+    FIVEM_API_SECRET: z.string().min(1).optional(),
+    // Role ids allowed to run `/kick`. Optional: defaults to the Server Staff Team role.
+    KICK_ALLOWED_ROLE_IDS: snowflakeList(),
+
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: integerish(4000, { min: 1, max: 65535 }),
     SESSION_SECRET: z.string().min(1).optional(),
