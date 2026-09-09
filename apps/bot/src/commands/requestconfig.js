@@ -141,8 +141,29 @@ export async function execute(interaction) {
     });
   } catch (error) {
     log.warn({ err: serializeError(error), sub, guildId }, 'requestconfig failed');
-    return interaction.editReply({
-      embeds: [errorEmbed('Could not save that', 'The database did not answer. Try again in a moment.')],
-    });
+    return interaction.editReply({ embeds: [errorEmbed('Could not save that', explainDbError(error))] });
   }
+}
+
+/**
+ * Turns a database failure into the message an operator needs. A missing table or an
+ * out-of-date client is a deploy problem, not a transient one — say so, rather than "try
+ * again" for something that will never succeed on its own.
+ */
+function explainDbError(error) {
+  const code = error?.code;
+  const message = String(error?.message ?? '');
+  if (code === 'P2021' || code === 'P2022' || /does not exist/i.test(message)) {
+    return (
+      'The database is missing the request-settings table — the latest migration has not been ' +
+      'applied. On the bot host run `npx prisma migrate deploy`, then restart the bot.'
+    );
+  }
+  if (error instanceof TypeError && /undefined/.test(message)) {
+    return (
+      "The bot's database client is out of date (it has no request-settings model). On the bot " +
+      'host run `npx prisma generate`, then restart the bot.'
+    );
+  }
+  return 'The database did not answer. Try again in a moment.';
 }
