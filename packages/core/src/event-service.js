@@ -497,10 +497,32 @@ async function propagateMemberName({ prisma, gateway, discordUserId }) {
     rosterByGuild.set(row.roster.approvedGuildId, list);
   }
 
+  // Guilds where the member is on a roster that has nickname sync turned OFF are
+  // hands-off: that roster is run manually, so we must not copy the authority
+  // nickname into it (which would otherwise happen via the plain-name branch,
+  // since a sync-off roster is absent from rosterByGuild above).
+  const manualGuilds = new Set(
+    (
+      await prisma.rosterMembership.findMany({
+        where: {
+          discordUserId,
+          status: RosterMembershipStatus.ACTIVE,
+          roster: {
+            ...notDeleted,
+            nicknameSyncEnabled: false,
+            approvedGuildId: { in: guilds.map((g) => g.id) },
+          },
+        },
+        select: { roster: { select: { approvedGuildId: true } } },
+      })
+    ).map((row) => row.roster.approvedGuildId),
+  );
+
   const ctx = { ...systemContext({ label: 'name-sync' }), source: ActionSource.DISCORD };
   const jobIds = [];
 
   for (const guild of guilds) {
+    if (manualGuilds.has(guild.id)) continue; // manual roster — never touch its nicknames
     const rosterMemberships = rosterByGuild.get(guild.id);
     if (rosterMemberships?.length) {
       const toWrite = rosterMemberships.filter((m) => m.syncedName !== name);
