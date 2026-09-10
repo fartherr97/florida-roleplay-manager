@@ -610,9 +610,30 @@ export async function mirrorNameToNonRosterGuilds({ prisma, gateway, discordUser
     ).map((row) => row.roster.approvedGuildId),
   );
 
+  // A guild where the member is on a roster that has nickname sync turned OFF is
+  // hands-off: that roster is maintained manually, so the bot must not mirror the
+  // authority (staff) name into it either — otherwise a manual roster still gets
+  // its members renamed from another guild.
+  const manual = new Set(
+    (
+      await prisma.rosterMembership.findMany({
+        where: {
+          discordUserId,
+          status: RosterMembershipStatus.ACTIVE,
+          roster: {
+            ...notDeleted,
+            nicknameSyncEnabled: false,
+            approvedGuildId: { in: guilds.map((g) => g.id) },
+          },
+        },
+        select: { roster: { select: { approvedGuildId: true } } },
+      })
+    ).map((row) => row.roster.approvedGuildId),
+  );
+
   let mirrored = 0;
   for (const guild of guilds) {
-    if (rostered.has(guild.id)) continue;
+    if (rostered.has(guild.id) || manual.has(guild.id)) continue;
     const member = await gateway.getMember(guild.discordGuildId, discordUserId).catch(() => null);
     if (!member) continue;
     if (String(member.displayName ?? '').trim() === fullNick) continue;
