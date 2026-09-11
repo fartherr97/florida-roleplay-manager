@@ -405,11 +405,16 @@ export async function handleMemberNicknameChange({
  * @returns {Promise<{id: string, discordGuildId: string}|null>}
  */
 async function resolveNameAuthorityGuild({ prisma, discordUserId }) {
+  // Manual rosters (nickname sync OFF) still count as a name source: the bot never
+  // formats or overwrites their guild's nickname, but it mirrors whatever it's manually
+  // set to into the member's other guilds (the SSRP model — hand-set the department
+  // name, main guild follows). A manual guild is never a mirror target (the propagation
+  // loops skip it), so it is only ever read here, never written.
   const memberships = await prisma.rosterMembership.findMany({
     where: {
       discordUserId,
       status: RosterMembershipStatus.ACTIVE,
-      roster: { ...notDeleted, nicknameSyncEnabled: true },
+      roster: { ...notDeleted },
     },
     select: {
       rank: { select: { nicknamePriority: true, position: true } },
