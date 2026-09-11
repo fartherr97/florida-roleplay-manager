@@ -391,9 +391,16 @@ export async function handleMemberNicknameChange({
  *
  * MAIN (staff/dev/director/owner ranks) wins outright — the main community's name
  * everywhere. Otherwise the highest DEPARTMENT rank makes its own guild the source,
- * for a full-time member whose department name should show. With neither, the main
- * community is the default source. Returns null for a member on no nickname roster at
- * all: they are not tracked, so their name is their own business.
+ * for a full-time member whose department name should show.
+ *
+ * With neither an explicit MAIN nor an explicit DEPARTMENT priority: a member who
+ * sits on the main community roster is sourced from there; but a member who is ONLY
+ * on department roster(s) — not on the main community roster — is sourced from their
+ * (highest) department, so their department name mirrors into the main guild by
+ * default rather than the main guild being left as an untouched source. Only a
+ * member on no nickname roster at all returns null (not tracked — their name is
+ * their own business), or when there is genuinely nothing else, the configured
+ * main community guild is the last-resort source of truth.
  *
  * @returns {Promise<{id: string, discordGuildId: string}|null>}
  */
@@ -415,10 +422,16 @@ async function resolveNameAuthorityGuild({ prisma, discordUserId }) {
 
   let mainCommunityGuild = null;
   let hasMainRank = false;
-  let bestDept = null; // { guild, position }
+  let bestDept = null; // { guild, position } — explicit DEPARTMENT-priority ranks only
+  let anyDept = null; // { guild, position } — highest department membership, any priority
   for (const m of memberships) {
     const guild = m.roster.guild;
-    if (guild?.type === GuildType.MAIN_COMMUNITY) mainCommunityGuild = guild;
+    if (guild?.type === GuildType.MAIN_COMMUNITY) {
+      mainCommunityGuild = guild;
+    } else if (guild) {
+      const position = m.rank?.position ?? 0;
+      if (!anyDept || position > anyDept.position) anyDept = { guild, position };
+    }
     const priority = m.rank?.nicknamePriority ?? NicknamePriority.NONE;
     if (priority === NicknamePriority.MAIN) hasMainRank = true;
     else if (priority === NicknamePriority.DEPARTMENT) {
@@ -431,9 +444,14 @@ async function resolveNameAuthorityGuild({ prisma, discordUserId }) {
 
   if (hasMainRank && mainCommunityGuild) return pick(mainCommunityGuild);
   if (bestDept) return pick(bestDept.guild);
+  // On the main community roster (with no priority rank): the community name is theirs.
   if (mainCommunityGuild) return pick(mainCommunityGuild);
-  // On a roster, but not the main community and no priority rank: fall back to the
-  // configured main community guild so the name still has one source of truth.
+  // Department-only member with no priority set: their department is the source, so the
+  // department name is what mirrors into the main guild (the common "full-time member"
+  // case that otherwise left the main guild untouched).
+  if (anyDept) return pick(anyDept.guild);
+  // Nothing else to go on: fall back to the configured main community guild so a name
+  // still has one source of truth.
   const main = await prisma.approvedGuild.findFirst({
     where: { type: GuildType.MAIN_COMMUNITY, enabled: true, ...notDeleted },
     select: { id: true, discordGuildId: true },
@@ -520,9 +538,10 @@ async function propagateMemberName({ prisma, gateway, discordUserId }) {
 
   const ctx = { ...systemContext({ label: 'name-sync' }), source: ActionSource.DISCORD };
   const jobIds = [];
+  const outcomes = {}; // per-guild decision, for diagnosing "main guild not renamed"
 
   for (const guild of guilds) {
-    if (manualGuilds.has(guild.id)) continue; // manual roster — never touch its nicknames
+    if (manualGuilds.has(guild.id)) { outcomes[guild.discordGuildId] = 'skip:manual-roster'; continue; }
     const rosterMemberships = rosterByGuild.get(guild.id);
     if (rosterMemberships?.length) {
       const toWrite = rosterMemberships.filter((m) => m.syncedName !== name);
@@ -542,14 +561,19 @@ async function propagateMemberName({ prisma, gateway, discordUserId }) {
         }).catch(() => null);
         if (job) jobIds.push(job.id);
       }
+      // This guild keeps its own roster format; the name reaches it via the queued sync.
+      outcomes[guild.discordGuildId] = 'own-roster:queued-sync';
       continue;
     }
 
     // No roster here: mirror the authority guild's whole nickname verbatim, so this guild
     // shows an exact 1:1 copy — callsign, rank and name. Skip if it already matches.
     const member = await gateway.getMember(guild.discordGuildId, discordUserId).catch(() => null);
-    if (!member) continue;
-    if (String(member.displayName ?? '').trim() === fullNick) continue;
+    if (!member) { outcomes[guild.discordGuildId] = 'skip:not-a-member'; continue; }
+    if (String(member.displayName ?? '').trim() === fullNick) {
+      outcomes[guild.discordGuildId] = 'skip:already-matches';
+      continue;
+    }
 
     await writeNicknameMarker({
       discordGuildId: guild.discordGuildId,
@@ -558,11 +582,18 @@ async function propagateMemberName({ prisma, gateway, discordUserId }) {
     }).catch(() => {});
     try {
       await gateway.setNickname(guild.discordGuildId, discordUserId, fullNick, 'FRM name sync');
+      outcomes[guild.discordGuildId] = 'renamed';
     } catch (error) {
       await discardNicknameMarker({ discordGuildId: guild.discordGuildId, discordUserId }).catch(() => {});
+      outcomes[guild.discordGuildId] = 'error';
       log.warn({ err: serializeError(error), guild: guild.discordGuildId }, 'name mirror failed');
     }
   }
+
+  log.info(
+    { discordUserId, authorityGuild: authority.discordGuildId, name: fullNick, outcomes },
+    'name propagation across guilds',
+  );
 
   // The authoritative guild's own rows never carry a synced name — the local nickname
   // rules there — so clear any left over from a previous authority.
@@ -654,11 +685,18 @@ export async function mirrorNameToNonRosterGuilds({ prisma, gateway, discordUser
   );
 
   let mirrored = 0;
+  // Per-guild outcome, so a "why didn't the main guild get renamed?" question can be
+  // answered straight from the logs: each target guild resolves to exactly one of these.
+  const outcomes = {};
   for (const guild of guilds) {
-    if (rostered.has(guild.id) || manual.has(guild.id)) continue;
+    if (rostered.has(guild.id)) { outcomes[guild.discordGuildId] = 'skip:has-own-roster'; continue; }
+    if (manual.has(guild.id)) { outcomes[guild.discordGuildId] = 'skip:manual-roster'; continue; }
     const member = await gateway.getMember(guild.discordGuildId, discordUserId).catch(() => null);
-    if (!member) continue;
-    if (String(member.displayName ?? '').trim() === fullNick) continue;
+    if (!member) { outcomes[guild.discordGuildId] = 'skip:not-a-member'; continue; }
+    if (String(member.displayName ?? '').trim() === fullNick) {
+      outcomes[guild.discordGuildId] = 'skip:already-matches';
+      continue;
+    }
 
     await writeNicknameMarker({
       discordGuildId: guild.discordGuildId,
@@ -668,13 +706,22 @@ export async function mirrorNameToNonRosterGuilds({ prisma, gateway, discordUser
     try {
       await gateway.setNickname(guild.discordGuildId, discordUserId, fullNick, 'FRM name sync');
       mirrored += 1;
+      outcomes[guild.discordGuildId] = 'renamed';
     } catch (error) {
       await discardNicknameMarker({ discordGuildId: guild.discordGuildId, discordUserId }).catch(() => {});
+      outcomes[guild.discordGuildId] = 'error';
       log.warn({ err: serializeError(error), guild: guild.discordGuildId }, 'name mirror failed');
     }
   }
 
-  return { mirrored: true, count: mirrored, name: fullNick };
+  // One line that explains the whole decision — the authority guild whose name won,
+  // the name being pushed, and what happened in each other guild.
+  log.info(
+    { discordUserId, authorityGuild: authority.discordGuildId, name: fullNick, mirrored, outcomes },
+    'name mirror to non-roster guilds',
+  );
+
+  return { mirrored: true, count: mirrored, name: fullNick, outcomes };
 }
 
 /**
